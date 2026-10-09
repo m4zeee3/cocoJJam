@@ -21,7 +21,9 @@ import { estimateCookBy, toIsoDate, type CookByEstimate } from '@/domain/cook-by
 import { STORAGE_LABEL, UNIT_LABEL, type Purchase, type Stage, type Storage } from '@/domain/types';
 import { useTheme } from '@/hooks/use-theme';
 import { openScanner } from '@/lib/open-scanner';
+import { FISH_SPECIES, isGenericFish } from '@/domain/fish';
 import { classify, DEMO_MODE, type Guess } from '@/ml/classifier';
+import { viewNote } from '@/ml/labels';
 
 const LOW_CONFIDENCE = 0.5;
 const MEAT_OR_FISH = new Set(['tilapia', 'bangus', 'galunggong', 'tamban', 'pork', 'chicken', 'beef']);
@@ -54,6 +56,8 @@ type Scan = {
   item: string;
   stage: Stage;
   typedIn: boolean;
+  /** "Checked by the gills · looks fresh" (fish only). */
+  note?: string | null;
   storage?: Storage;
   purchase?: Purchase;
   estimate?: CookByEstimate;
@@ -72,6 +76,7 @@ type Step =
   | 'checking'
   | 'pickItem'
   | 'typeItem'
+  | 'species'
   | 'storage'
   | 'purchase'
   | 'result'
@@ -119,7 +124,7 @@ function ScanChat({ initialPhoto }: { initialPhoto?: string }) {
       (top) => {
         setGuesses(top);
         if (top[0] && top[0].confidence >= LOW_CONFIDENCE) {
-          identify(initialPhoto, top[0].item, top[0].stage, false);
+          identify(initialPhoto, top[0].item, top[0].stage, false, viewNote(top[0]));
         } else {
           // UC-1.4: not confident, so let the user pick or type the item.
           say({ kind: 'bot', text: "I'm not fully sure which item this is. Is it one of these?" });
@@ -142,23 +147,42 @@ function ScanChat({ initialPhoto }: { initialPhoto?: string }) {
     setStep('start');
   }
 
-  function identify(uri: string, item: string, stage: Stage | null, typedIn: boolean) {
+  function identify(uri: string, item: string, stage: Stage | null, typedIn: boolean, note?: string | null) {
     // The placeholder model has no freshness stages yet, so assume Good.
-    const next: Scan = { photo: uri, item, stage: stage ?? 'good', typedIn };
+    const next: Scan = { photo: uri, item, stage: stage ?? 'good', typedIn, note };
     setScan(next);
+    say({ kind: 'identified', scan: next });
+    // The model can't tell fish species apart; price and shelf life need it.
+    if (isGenericFish(item)) {
+      say({ kind: 'bot', text: 'Which fish is it?' });
+      setStep('species');
+      return;
+    }
+    afterIdentified(next);
+  }
+
+  function answerSpecies(species: string) {
+    if (!scan) return;
+    const next: Scan = { ...scan, item: species };
+    setScan(next);
+    say({ kind: 'user', text: FISH_SPECIES.find((f) => f.value === species)?.label ?? species });
+    afterIdentified(next);
+  }
+
+  function afterIdentified(next: Scan) {
     if (next.stage === 'spoiled') {
       // UC-1.6
-      say({ kind: 'identified', scan: next }, { kind: 'spoiled', scan: next });
+      say({ kind: 'spoiled', scan: next });
       setStep('spoiled');
     } else {
-      say({ kind: 'identified', scan: next }, { kind: 'bot', text: 'Where is it stored?' });
+      say({ kind: 'bot', text: 'Where is it stored?' });
       setStep('storage');
     }
   }
 
-  function pickItem(item: string, stage: Stage | null, typedIn: boolean) {
+  function pickItem(item: string, stage: Stage | null, typedIn: boolean, note?: string | null) {
     say({ kind: 'user', text: item }, { kind: 'bot', text: `Thanks! Checking it as ${item} now.` });
-    identify(photo, item.toLowerCase(), stage, typedIn);
+    identify(photo, item.toLowerCase(), stage, typedIn, note);
   }
 
   function answerStorage(storage: Storage) {
@@ -270,7 +294,7 @@ function ScanChat({ initialPhoto }: { initialPhoto?: string }) {
           <View style={styles.indent}>
             <Card style={styles.radioCard}>
               {guesses.map((g) => (
-                <Pressable key={g.label} onPress={() => pickItem(g.item, g.stage, false)} style={styles.radioRow}>
+                <Pressable key={g.label} onPress={() => pickItem(g.item, g.stage, false, viewNote(g))} style={styles.radioRow}>
                   <Ionicons name="radio-button-off" size={18} color={theme.textSecondary} />
                   <ThemedText type="smallBold" style={styles.capitalize}>
                     {g.item}
@@ -306,6 +330,11 @@ function ScanChat({ initialPhoto }: { initialPhoto?: string }) {
           </View>
         )}
 
+        {step === 'species' && (
+          <View style={styles.indent}>
+            <Chips options={FISH_SPECIES} onPick={answerSpecies} />
+          </View>
+        )}
         {step === 'storage' && (
           <View style={styles.indent}>
             <Chips options={STORAGES} onPick={answerStorage} />
@@ -384,7 +413,7 @@ function Welcome({ onCamera, onGallery }: { onCamera: () => void; onGallery: () 
   return (
     <BotTurn>
       <BotBubble>
-        {"Hi! Snap or pick a photo of raw meat, fish, fruits or veggies. I'll check how fresh it is, right here on your phone."}
+        {"Hi! Snap or pick a photo of raw beef, pork, chicken or fish. I'll check how fresh it is, right here on your phone."}
       </BotBubble>
       <BotBubble>
         <ThemedText type="label">For the best result</ThemedText>
@@ -445,7 +474,7 @@ function Message({ msg }: { msg: Msg }) {
       return (
         <BotTurn>
           <Card>
-            <ItemRow scan={msg.scan} detail={msg.scan.typedIn ? 'typed in' : 'identified'} />
+            <ItemRow scan={msg.scan} detail={msg.scan.note ?? (msg.scan.typedIn ? 'typed in' : 'identified on-device')} />
           </Card>
         </BotTurn>
       );
@@ -461,8 +490,8 @@ function Message({ msg }: { msg: Msg }) {
                 {"Spoilage can spread inside the food, even where you can't see it."}
               </ThemedText>
             </Note>
-            <Note icon="leaf-outline" tone="fresh">
-              Compost it, or seal it in a bag before throwing it out.
+            <Note icon="trash-outline" tone="neutral">
+              Seal it in a bag before throwing it out so it doesn&apos;t attract pests.
             </Note>
           </Card>
           <ThemedText type="caption" themeColor="textSecondary">

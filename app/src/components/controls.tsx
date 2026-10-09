@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useEffect, type ReactNode } from 'react';
-import { KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
@@ -21,7 +21,10 @@ export function Sheet({ visible, onClose, children }: { visible: boolean; onClos
             { backgroundColor: theme.backgroundElement, paddingBottom: Spacing.four + insets.bottom },
           ]}>
           <View style={[styles.grabber, { backgroundColor: theme.backgroundSelected }]} />
-          {children}
+          {/* Scrolls when the content is taller than the screen (long forms, small phones). */}
+          <ScrollView bounces={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.sheetContent}>
+            {children}
+          </ScrollView>
         </View>
       </KeyboardAvoidingView>
     </Modal>
@@ -177,12 +180,13 @@ const styles = StyleSheet.create({
   sheetRoot: { flex: 1, justifyContent: 'flex-end' },
   backdrop: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(35,33,30,0.45)' },
   sheet: {
+    maxHeight: '92%',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingHorizontal: Spacing.four - 4,
     paddingTop: Spacing.two,
-    gap: Spacing.three,
   },
+  sheetContent: { gap: Spacing.three },
   grabber: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, marginBottom: Spacing.two },
   segmented: { flexDirection: 'row', borderRadius: 12, padding: 3 },
   segment: { flex: 1, alignItems: 'center', paddingVertical: Spacing.two + 1, borderRadius: 10 },

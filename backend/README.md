@@ -63,6 +63,16 @@ The newer `updated_at` wins. An older edit comes back counted in `skipped_stale`
 `/sync/pull` returns a `cursor`. Store it and send it as `since` next time.
 The same record may come back twice, so apply pulled records by `id` and keep the copy with the newer `updated_at`.
 
+## Refreshing app prices
+
+`scripts/update_prices.py` rewrites `app/src/data/prices.json` with real NCR retail prices. The data is monthly PSA prices, published by WFP on HDX under the CC BY-IGO license. The app bundles the file, so prices work offline. Rerun it before each build:
+
+```bash
+python scripts/update_prices.py
+```
+
+It updates beef, pork, chicken, fish and most recipe ingredients. Rows WFP doesn't cover stay marked `"source": "sample"`. It also reports items that moved 5% or more vs their 12-month average, so the team can write a reason tag (`reason_title` and `reason` in `prices.json`). Reason tags are curated by hand, never generated.
+
 ## Tests
 
 The tests need a running MongoDB:

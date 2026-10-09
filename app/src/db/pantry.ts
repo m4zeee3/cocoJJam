@@ -103,9 +103,18 @@ export async function finishPantryItem(db: SQLiteDatabase, item: PantryItem, sta
     await updatePantryItem(db, item.id, { status });
     return;
   }
+  // A paid price is for the whole amount, so split it with the quantity.
+  const share = qty / item.quantity;
+  const paid = item.paid_price_php;
   await db.withTransactionAsync(async () => {
     await updatePantryItem(db, item.id, { quantity: item.quantity - qty });
-    const id = await addPantryItem(db, { ...item, quantity: qty, rescan_tomorrow: !!item.rescan_tomorrow });
+    if (paid != null) await db.runAsync(`UPDATE pantry_items SET paid_price_php = ? WHERE id = ?`, paid * (1 - share), item.id);
+    const id = await addPantryItem(db, {
+      ...item,
+      quantity: qty,
+      paid_price_php: paid == null ? null : paid * share,
+      rescan_tomorrow: !!item.rescan_tomorrow,
+    });
     await updatePantryItem(db, id, { status });
   });
 }

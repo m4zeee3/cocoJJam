@@ -1,10 +1,10 @@
-import Ionicons from '@expo/vector-icons/Ionicons';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Pill } from '@/components/badges';
 import { ThemedText } from '@/components/themed-text';
+import { ItemIcon } from '@/components/item-icon';
 import { Spacing, type ThemeColor } from '@/constants/theme';
 import type { PantryItem } from '@/db/pantry';
 import { daysUntil, shortCountdown } from '@/domain/cook-by';
@@ -35,7 +35,7 @@ export function PantryRow({ item, divider }: { item: PantryItem; divider?: boole
         {item.thumbnail_uri ? (
           <Image source={{ uri: item.thumbnail_uri }} style={StyleSheet.absoluteFill} contentFit="cover" />
         ) : (
-          <Ionicons name="nutrition-outline" size={20} color={theme.tint} />
+          <ItemIcon name={item.name} size={20} />
         )}
       </View>
       <View style={{ flex: 1 }}>

@@ -2,16 +2,15 @@ import Constants, { ExecutionEnvironment } from 'expo-constants';
 import type { TfliteModel } from 'react-native-fast-tflite';
 
 import LABELS from '@/assets/model/labels.json';
-import type { Stage } from '@/domain/types';
+import { interpret, type Guess } from '@/ml/labels';
 import { imageToRgb } from '@/ml/preprocess';
 
+export type { Guess } from '@/ml/labels';
+
 // Swap these two files for the trained model (see assets/model/README.md).
-// Labels are "<item>__<stage>", e.g. "tilapia__use_soon". A label without "__"
-// (the stock ImageNet placeholder) has no stage.
+// Labels like "beef/fresh" or "fish/gill-non-fresh"; see ml/labels.ts.
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- bundled asset
 const MODEL = require('../../assets/model/model.tflite');
-
-export type Guess = { label: string; item: string; stage: Stage | null; confidence: number };
 
 /**
  * Expo Go has no TFLite native module, so there the scanner returns sample
@@ -19,10 +18,16 @@ export type Guess = { label: string; item: string; stage: Stage | null; confiden
  */
 export const DEMO_MODE = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
-const DEMO_GUESSES: [string, number][][] = [
-  [['tilapia__good', 0.82], ['bangus__good', 0.11], ['pork__fresh', 0.04]],
-  [['banana__use_soon', 0.74], ['tomato__good', 0.15], ['kangkong__fresh', 0.06]],
-  [['pork__fresh', 0.41], ['chicken__fresh', 0.36], ['tilapia__good', 0.12]],
+// Sample score vectors in the trained model's label order (beef, chicken, fish ×4, pork).
+const DEMO_LABELS = [
+  'beef/fresh', 'beef/spoiled', 'chicken/fresh', 'chicken/spoiled',
+  'fish/eye-fresh', 'fish/eye-non-fresh', 'fish/gill-fresh', 'fish/gill-non-fresh',
+  'pork/fresh', 'pork/spoiled',
+];
+const DEMO_SCORES: number[][] = [
+  [0, 0, 0.01, 0, 0.12, 0.03, 0.72, 0.1, 0.01, 0.01], // fish, gills, good
+  [0.02, 0.01, 0.48, 0.34, 0, 0, 0, 0, 0.1, 0.05], // chicken, use soon
+  [0.34, 0.04, 0.01, 0, 0, 0, 0, 0, 0.4, 0.21], // pork vs beef, not sure
 ];
 let demoIndex = 0;
 
@@ -39,17 +44,9 @@ export function loadModel(): Promise<TfliteModel> {
   return modelPromise;
 }
 
-function parseLabel(label: string): Pick<Guess, 'item' | 'stage'> {
-  const [item, stage] = label.split('__');
-  return { item, stage: (stage as Stage | undefined) ?? null };
-}
-
 /** Run the on-device model on one photo; returns the top guesses, best first. */
 export async function classify(uri: string, top = 3): Promise<Guess[]> {
-  if (DEMO_MODE) {
-    const sample = DEMO_GUESSES[demoIndex++ % DEMO_GUESSES.length];
-    return sample.slice(0, top).map(([label, confidence]) => ({ label, confidence, ...parseLabel(label) }));
-  }
+  if (DEMO_MODE) return interpret(DEMO_LABELS, DEMO_SCORES[demoIndex++ % DEMO_SCORES.length], top);
   const model = await loadModel();
   const input = model.inputs[0];
   const size = input.shape[1]; // [1, height, width, 3]
@@ -68,9 +65,5 @@ export async function classify(uri: string, top = 3): Promise<Guess[]> {
       ? Array.from(new Uint8Array(out), (v) => v / 255)
       : Array.from(new Float32Array(out));
 
-  return scores
-    .map((confidence, i) => ({ label: LABELS[i] ?? `class_${i}`, confidence }))
-    .sort((a, b) => b.confidence - a.confidence)
-    .slice(0, top)
-    .map((g) => ({ ...g, ...parseLabel(g.label) }));
+  return interpret(LABELS as string[], scores, top);
 }

@@ -73,7 +73,14 @@ export default function HouseholdSetupScreen() {
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <StepTitle title={STEPS[step].title} body={STEPS[step].body} />
-          {step === 0 && <DietStep value={profile.diets} onChange={(diets) => set({ diets })} />}
+          {step === 0 && (
+            <DietStep
+              value={profile.diets}
+              other={profile.otherDiets}
+              onChange={(diets) => set({ diets })}
+              onOtherChange={(otherDiets) => set({ otherDiets })}
+            />
+          )}
           {step === 1 && (
             <AllergyStep
               value={profile.allergies}
@@ -90,6 +97,9 @@ export default function HouseholdSetupScreen() {
                 <ThemedText type="label">Your household</ThemedText>
                 {profile.diets.map((d) => (
                   <Summary key={d} icon="ban-outline" text={DIET_INFO[d].label} />
+                ))}
+                {profile.otherDiets.map((o) => (
+                  <Summary key={o} icon="ban-outline" text={o.charAt(0).toUpperCase() + o.slice(1)} />
                 ))}
                 {profile.allergies.map((a) => (
                   <Summary key={a} icon="alert-circle-outline" text={`Allergic to ${ALLERGY_INFO[a].label.toLowerCase()}`} />

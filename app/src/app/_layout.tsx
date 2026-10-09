@@ -12,6 +12,7 @@ import { SQLiteProvider } from 'expo-sqlite';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 
+import { AppSplash } from '@/components/app-splash';
 import { Colors } from '@/constants/theme';
 import { migrate } from '@/db/schema';
 import { AutoSync } from '@/sync/auto-sync';
@@ -44,6 +45,8 @@ export default function RootLayout() {
       <SQLiteProvider databaseName="cocojjam.db" onInit={migrate}>
         <AutoSync />
         <Stack screenOptions={{ headerShown: false }} />
+        {/* 01 Splash: covers the app while the on-device model loads */}
+        <AppSplash />
       </SQLiteProvider>
     </ThemeProvider>
   );

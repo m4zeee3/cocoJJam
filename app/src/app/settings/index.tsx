@@ -138,6 +138,8 @@ export default function SettingsScreen() {
 
         <Section title="Preferences">
           <Row icon="people-outline" label="Household profile" onPress={() => router.push('/household')} />
+          <Row icon="leaf-outline" label="Savings & waste" onPress={() => router.push('/savings')} divider />
+          <Row icon="list" label="Shopping list" onPress={() => router.push('/shopping')} divider />
         </Section>
 
         {session && (

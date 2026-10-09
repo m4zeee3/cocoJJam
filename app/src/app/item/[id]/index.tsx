@@ -12,6 +12,7 @@ import { Card } from '@/components/card';
 import { Note } from '@/components/chat';
 import { Segmented, Sheet, Stepper, Toast } from '@/components/controls';
 import { ThemedText } from '@/components/themed-text';
+import { ItemIcon } from '@/components/item-icon';
 import { Spacing, type ThemeColor } from '@/constants/theme';
 import {
   finishPantryItem,
@@ -129,7 +130,7 @@ export default function ItemDetailScreen() {
           {item.thumbnail_uri ? (
             <Image source={{ uri: item.thumbnail_uri }} style={StyleSheet.absoluteFill} contentFit="cover" />
           ) : (
-            <Ionicons name="nutrition-outline" size={64} color={theme.tint} />
+            <ItemIcon name={item.name} size={64} />
           )}
           <View style={styles.heroPill}>
             <Pill label={group} tone={{ fg: URGENCY_COLOR[group], bg: 'backgroundElement' }} />

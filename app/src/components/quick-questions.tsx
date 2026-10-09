@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Button } from '@/components/button';
+import { OtherInput } from '@/components/household-steps';
 import { Sheet, Stepper } from '@/components/controls';
 import { ThemedText } from '@/components/themed-text';
 import { Radius, Spacing } from '@/constants/theme';
@@ -14,23 +15,33 @@ function MultiPills<T extends string>({
   options,
   value,
   onChange,
+  other,
+  onOtherToggle,
 }: {
   options: { value: T; label: string }[];
   value: T[];
   onChange: (v: T[]) => void;
+  /** Whether "Other" (type it in) is on. */
+  other: boolean;
+  onOtherToggle: (on: boolean) => void;
 }) {
   const theme = useTheme();
-  const all: { value: T | null; label: string }[] = [{ value: null, label: 'None' }, ...options];
+  const all: { value: T | 'other' | null; label: string }[] = [{ value: null, label: 'None' }, ...options, { value: 'other', label: 'Other' }];
   return (
     <View style={styles.pills}>
       {all.map((o) => {
-        const selected = o.value === null ? value.length === 0 : value.includes(o.value);
+        const selected =
+          o.value === null ? value.length === 0 && !other : o.value === 'other' ? other : value.includes(o.value as T);
         return (
           <Pressable
             key={o.value ?? 'none'}
             onPress={() => {
-              if (o.value === null) return onChange([]);
-              const v = o.value;
+              if (o.value === null) {
+                onOtherToggle(false);
+                return onChange([]);
+              }
+              if (o.value === 'other') return onOtherToggle(!other);
+              const v = o.value as T;
               onChange(value.includes(v) ? value.filter((x) => x !== v) : [...value, v]);
             }}
             accessibilityRole="checkbox"
@@ -70,6 +81,10 @@ export function QuickQuestions({
   const theme = useTheme();
   const [diets, setDiets] = useState<Diet[]>(initial.diets);
   const [allergies, setAllergies] = useState<Allergy[]>(initial.allergies);
+  const [otherDiets, setOtherDiets] = useState<string[]>(initial.otherDiets);
+  const [otherAllergies, setOtherAllergies] = useState<string[]>(initial.otherAllergies);
+  const [dietOther, setDietOther] = useState(initial.otherDiets.length > 0);
+  const [allergyOther, setAllergyOther] = useState(initial.otherAllergies.length > 0);
   const [servings, setServings] = useState(initial.household_size);
   const [save, setSave] = useState(!mealOnly);
 
@@ -88,7 +103,13 @@ export function QuickQuestions({
           options={(Object.keys(DIET_INFO) as Diet[]).map((d) => ({ value: d, label: DIET_INFO[d].label }))}
           value={diets}
           onChange={setDiets}
+          other={dietOther}
+          onOtherToggle={(on) => {
+            setDietOther(on);
+            if (!on) setOtherDiets([]);
+          }}
         />
+        {dietOther && <OtherInput value={otherDiets} onChange={setOtherDiets} placeholder="e.g. no beef, walang baboy" />}
       </View>
 
       <View style={styles.group}>
@@ -97,7 +118,13 @@ export function QuickQuestions({
           options={(Object.keys(ALLERGY_INFO) as Allergy[]).map((a) => ({ value: a, label: ALLERGY_INFO[a].label }))}
           value={allergies}
           onChange={setAllergies}
+          other={allergyOther}
+          onOtherToggle={(on) => {
+            setAllergyOther(on);
+            if (!on) setOtherAllergies([]);
+          }}
         />
+        {allergyOther && <OtherInput value={otherAllergies} onChange={setOtherAllergies} placeholder="e.g. squid, sili" />}
       </View>
 
       <View style={styles.servings}>
@@ -114,7 +141,10 @@ export function QuickQuestions({
         </ThemedText>
       </Pressable>
 
-      <Button title="Show dishes" onPress={() => onSubmit({ ...initial, diets, allergies, household_size: servings }, save)} />
+      <Button
+        title="Show dishes"
+        onPress={() => onSubmit({ ...initial, diets, otherDiets, allergies, otherAllergies, household_size: servings }, save)}
+      />
     </Sheet>
   );
 }

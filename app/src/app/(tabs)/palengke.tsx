@@ -1,15 +1,17 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
-import { StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Pill } from '@/components/badges';
 import { Button } from '@/components/button';
 import { Card } from '@/components/card';
 import { Screen } from '@/components/screen';
 import { ThemedText } from '@/components/themed-text';
+import { ItemIcon } from '@/components/item-icon';
 import { Spacing, type ThemeColor } from '@/constants/theme';
 import { listTodayChecks, type PalengkeCheck } from '@/db/palengke';
 import { REFERENCE_DATE, unitShort, VERDICT_LABEL, type VerdictKind } from '@/domain/palengke';
+import { PRICE_SOURCE } from '@/domain/prices';
 import { useFocusQuery } from '@/hooks/use-pantry';
 import { useTheme } from '@/hooks/use-theme';
 import { pickPhoto } from '@/lib/open-scanner';
@@ -46,9 +48,9 @@ export default function PalengkeScreen() {
 
       <Card tone="highlight" style={styles.hero}>
         <View style={styles.icons}>
-          {(['fish-outline', 'nutrition-outline', 'leaf-outline'] as const).map((icon) => (
-            <View key={icon} style={[styles.iconBubble, { backgroundColor: theme.backgroundElement }]}>
-              <Ionicons name={icon} size={18} color={theme.tint} />
+          {['bangus', 'chicken', 'pork'].map((name) => (
+            <View key={name} style={[styles.iconBubble, { backgroundColor: theme.backgroundElement }]}>
+              <ItemIcon name={name} size={18} />
             </View>
           ))}
         </View>
@@ -60,12 +62,15 @@ export default function PalengkeScreen() {
         <Button title="Scan an item" icon="scan" onPress={scan} />
       </Card>
 
-      <View style={styles.inline}>
+      <Pressable onPress={() => router.push('/prices')} accessibilityRole="button" style={styles.inline}>
         <Ionicons name="information-circle-outline" size={14} color={theme.textSecondary} />
-        <ThemedText type="caption" themeColor="textSecondary">
-          Reference prices as of {REFERENCE_DATE} · NCR · updates when online
+        <ThemedText type="caption" themeColor="textSecondary" style={{ flex: 1 }}>
+          Reference prices: {PRICE_SOURCE}, as of {REFERENCE_DATE}
         </ThemedText>
-      </View>
+        <ThemedText type="label" themeColor="tintText">
+          See all
+        </ThemedText>
+      </Pressable>
 
       {checks.length > 0 && (
         <View style={{ gap: Spacing.two }}>

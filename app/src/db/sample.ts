@@ -6,15 +6,13 @@ import { toIsoDate } from '@/domain/cook-by';
 import type { Stage, Storage } from '@/domain/types';
 
 const SAMPLE: { name: string; quantity: number; unit: string; storage: Storage; stage: Stage; days: number }[] = [
+  // Beef, pork, chicken and fish only: the app's dataset. 6 items at different urgency (demo script).
   { name: 'bangus', quantity: 2, unit: 'pc', storage: 'ref', stage: 'good', days: 0 },
-  { name: 'kangkong', quantity: 1, unit: 'bundle', storage: 'ref', stage: 'use_soon', days: 0 },
-  { name: 'tomato', quantity: 4, unit: 'pc', storage: 'counter', stage: 'use_soon', days: 1 },
-  { name: 'pork', quantity: 1, unit: 'pc', storage: 'ref', stage: 'good', days: 2 },
-  { name: 'onion', quantity: 3, unit: 'pc', storage: 'counter', stage: 'good', days: 3 },
-  { name: 'banana', quantity: 6, unit: 'pc', storage: 'counter', stage: 'fresh', days: 4 },
-  { name: 'garlic', quantity: 1, unit: 'pc', storage: 'counter', stage: 'fresh', days: 14 },
-  { name: 'chicken', quantity: 1, unit: 'pc', storage: 'freezer', stage: 'fresh', days: 60 },
-  { name: 'ginger', quantity: 1, unit: 'pc', storage: 'ref', stage: 'fresh', days: 10 },
+  { name: 'chicken', quantity: 1, unit: 'kg', storage: 'ref', stage: 'use_soon', days: 0 },
+  { name: 'tilapia', quantity: 2, unit: 'pc', storage: 'ref', stage: 'good', days: 1 },
+  { name: 'pork', quantity: 500, unit: 'g', storage: 'ref', stage: 'good', days: 2 },
+  { name: 'galunggong', quantity: 6, unit: 'pc', storage: 'freezer', stage: 'fresh', days: 45 },
+  { name: 'beef', quantity: 1, unit: 'kg', storage: 'freezer', stage: 'fresh', days: 120 },
 ];
 
 /** Demo data so the full Home dashboard (UC-12.2) shows without scanning first. */
@@ -38,8 +36,41 @@ export async function loadSamplePantry(db: SQLiteDatabase) {
         paid_price_php: null,
       });
     }
+    // Used and wasted items earlier this month, so Savings has a story to tell (UC-8.1).
+    const day = today.getDate();
+    const finished: { name: string; quantity: number; unit: string; status: 'used' | 'wasted'; daysAgo: number }[] = [
+      { name: 'pork', quantity: 500, unit: 'g', status: 'used', daysAgo: 1 },
+      { name: 'bangus', quantity: 2, unit: 'pc', status: 'used', daysAgo: 1 },
+      { name: 'galunggong', quantity: 6, unit: 'pc', status: 'used', daysAgo: 2 },
+      { name: 'tilapia', quantity: 1, unit: 'pc', status: 'wasted', daysAgo: 2 },
+      { name: 'chicken', quantity: 1, unit: 'kg', status: 'used', daysAgo: 6 },
+      { name: 'bangus', quantity: 1, unit: 'pc', status: 'wasted', daysAgo: 7 },
+      { name: 'beef', quantity: 500, unit: 'g', status: 'used', daysAgo: 9 },
+      { name: 'tilapia', quantity: 2, unit: 'pc', status: 'used', daysAgo: 12 },
+      { name: 'pork', quantity: 750, unit: 'g', status: 'used', daysAgo: 15 },
+      { name: 'chicken', quantity: 500, unit: 'g', status: 'wasted', daysAgo: 16 },
+    ];
+    for (const f of finished.filter((x) => x.daysAgo < day)) {
+      const at = new Date(today);
+      at.setDate(day - f.daysAgo);
+      const id = await addPantryItem(db, {
+        name: f.name,
+        category: null,
+        quantity: f.quantity,
+        unit: f.unit,
+        storage: 'ref',
+        stage: f.status === 'wasted' ? 'spoiled' : 'good',
+        confidence: 'high',
+        date_added: toIsoDate(at),
+        cook_by: toIsoDate(at),
+        thumbnail_uri: null,
+        paid_price_php: null,
+      });
+      await db.runAsync(`UPDATE pantry_items SET status = ?, updated_at = ? WHERE id = ?`, f.status, at.getTime(), id);
+    }
+
     const yesterday = today.getTime() - 86_400_000;
-    await addScan(db, [{ name: 'pork', stage: 'good' }, { name: 'onion', stage: 'good' }, { name: 'tomato', stage: 'use_soon' }], yesterday);
-    await addScan(db, [{ name: 'bangus', stage: 'good' }, { name: 'kangkong', stage: 'use_soon' }]);
+    await addScan(db, [{ name: 'pork', stage: 'good' }, { name: 'tilapia', stage: 'good' }, { name: 'chicken', stage: 'use_soon' }], yesterday);
+    await addScan(db, [{ name: 'bangus', stage: 'good' }, { name: 'chicken', stage: 'use_soon' }]);
   });
 }

@@ -27,6 +27,9 @@ const light = {
   tint: Palette.orange,
   tintText: Palette.orangeText,
   highlight: Palette.peach,
+  // Home summary card: a deeper peach than `highlight` so it stands out on cream, plus its bubbles.
+  summary: '#FFE9DB',
+  summaryBubble: '#FFDCC4',
   fresh: Palette.freshGreen,
   freshSoft: '#E8F7EE',
   amber: Palette.amber,

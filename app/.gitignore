@@ -41,3 +41,7 @@ example
 # generated native folders
 /ios
 /android
+
+# Local signing key for EAS builds (see credentials.json)
+credentials/
+credentials.json

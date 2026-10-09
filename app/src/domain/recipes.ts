@@ -2,12 +2,20 @@ import data from '@/data/recipes.json';
 import type { PantryItem } from '@/db/pantry';
 import type { Allergy, Diet, Profile } from '@/db/profile';
 import { urgencyGroup } from '@/domain/cook-by';
-import { costQty, priceFor } from '@/domain/prices';
+import { ingredientsFor } from '@/domain/custom-terms';
+import { costQty, NOTABLE_CHANGE, priceFor, priceInfo } from '@/domain/prices';
 
 type Ingredient = { item: string; qty: number; unit: string; prep?: string; cost_qty?: number };
-export type Recipe = Omit<(typeof data.recipes)[number], 'ingredients'> & { ingredients: Ingredient[] };
+export type Recipe = Omit<(typeof data.recipes)[number], 'ingredients' | 'swap'> & {
+  ingredients: Ingredient[];
+  /** A cheaper recipe to suggest when the main ingredient is pricier than usual (UC-4.3). */
+  swap?: string;
+};
 
 const RECIPES = data.recipes as Recipe[];
+
+/** Every ingredient key the recipes use, for matching typed-in diets and allergies. */
+export const INGREDIENT_KEYS = [...new Set(RECIPES.flatMap((r) => r.ingredients.map((i) => i.item)))];
 
 // What each ingredient means for diets and allergies (UC-3.3).
 type Tag = 'pork' | 'meat' | 'fish' | 'shellfish' | 'egg' | 'peanuts' | 'salty';
@@ -32,7 +40,6 @@ const TAGS: Record<string, Tag[]> = {
 const DIET_EXCLUDES: Record<Diet, Tag[]> = {
   no_pork: ['pork'],
   halal: ['pork'],
-  vegetarian: ['meat', 'fish', 'shellfish'],
   low_salt: ['salty'],
 };
 const ALLERGY_EXCLUDES: Record<Allergy, Tag[]> = {
@@ -53,9 +60,10 @@ function blockedBy(recipe: Recipe, profile: Profile): Restriction[] {
   const out: Restriction[] = [];
   for (const d of profile.diets) if (DIET_EXCLUDES[d].some((t) => tags.has(t))) out.push({ kind: 'diet', value: d });
   for (const a of profile.allergies) if (ALLERGY_EXCLUDES[a].some((t) => tags.has(t))) out.push({ kind: 'allergy', value: a });
-  // Typed-in allergies match ingredient names ("mango" hides anything with mango).
-  for (const o of profile.otherAllergies) {
-    if (recipe.ingredients.some((i) => i.item.includes(o) || o.includes(i.item))) out.push({ kind: 'other', value: o });
+  // Typed-in diets and allergies ("no beef", "walang baboy", "shrimp") rule out the ingredients they name.
+  for (const o of [...profile.otherDiets, ...profile.otherAllergies]) {
+    const banned = ingredientsFor(o, INGREDIENT_KEYS);
+    if (recipe.ingredients.some((i) => banned.has(i.item))) out.push({ kind: 'other', value: o });
   }
   return out;
 }
@@ -63,6 +71,9 @@ function blockedBy(recipe: Recipe, profile: Profile): Restriction[] {
 export type Line = {
   item: string;
   name: string;
+  /** Rounded amount for the chosen servings, in `unit`. */
+  qty: number;
+  unit: string;
   amount: string;
   /** Estimated price for this line at the chosen servings; null when the table has no price. */
   cost: number | null;
@@ -70,6 +81,10 @@ export type Line = {
   haveText?: string;
   /** Part of `cost` still to buy. */
   toBuy: number;
+  /** "₱25 each", "₱200/kg midpoint": how the line was priced (E01). */
+  unitPrice: string | null;
+  /** This month vs the 12-month average (UC-4.2); null without price data. */
+  change: number | null;
 };
 
 export type RecipeView = Recipe & {
@@ -78,6 +93,8 @@ export type RecipeView = Recipe & {
   cost: number;
   toBuy: number;
   partialCost: boolean;
+  /** Ingredients left out of the estimate because they have no price (UC-4.5). */
+  unpriced: number;
   uses: string[];
   urgentUses: number;
 };
@@ -131,14 +148,24 @@ export function viewRecipe(recipe: Recipe, pantry: PantryItem[], servings = reci
         missing = 0;
       }
     }
+    const info = priceInfo(ing.item);
+    const unitPrice = !info || cost == null
+      ? null
+      : ing.unit === info.unit
+        ? `₱${Math.round(info.mid)}/${info.unit} midpoint`
+        : `₱${Math.round(cost / qty)} each`;
     return {
       item: ing.item,
       name: NAMES[ing.item] ?? capitalize(ing.item),
+      qty,
+      unit: ing.unit,
       amount: [formatAmount(qty, ing.unit), ing.prep].filter(Boolean).join(', '),
       cost,
       have,
       haveText,
       toBuy: (cost ?? 0) * missing,
+      unitPrice,
+      change: info ? info.change : null,
     };
   });
   const urgent = new Set(pantry.filter((p) => urgencyGroup(p.cook_by) !== 'Fresh').map((p) => p.name));
@@ -150,6 +177,7 @@ export function viewRecipe(recipe: Recipe, pantry: PantryItem[], servings = reci
     cost: lines.reduce((s, l) => s + (l.cost ?? 0), 0),
     toBuy: lines.reduce((s, l) => s + l.toBuy, 0),
     partialCost: lines.some((l) => l.cost == null),
+    unpriced: lines.filter((l) => l.cost == null).length,
     uses,
     urgentUses: uses.filter((u) => urgent.has(u)).length,
   };
@@ -159,7 +187,14 @@ export function getRecipe(id: string) {
   return RECIPES.find((r) => r.id === id) ?? null;
 }
 
-export const DEFAULT_PROFILE: Profile = { diets: [], allergies: [], otherAllergies: [], household_size: 4, weekly_budget_php: null };
+export const DEFAULT_PROFILE: Profile = {
+  diets: [],
+  otherDiets: [],
+  allergies: [],
+  otherAllergies: [],
+  household_size: 4,
+  weekly_budget_php: null,
+};
 
 export type Recommendation = {
   matches: RecipeView[];
@@ -199,15 +234,37 @@ export function recommend(pantry: PantryItem[], profile: Profile, focus?: string
 export function relaxProfile(profile: Profile, r: Restriction): Profile {
   if (r.kind === 'diet') return { ...profile, diets: profile.diets.filter((d) => d !== r.value) };
   if (r.kind === 'allergy') return { ...profile, allergies: profile.allergies.filter((a) => a !== r.value) };
-  return { ...profile, otherAllergies: profile.otherAllergies.filter((o) => o !== r.value) };
+  return {
+    ...profile,
+    otherDiets: profile.otherDiets.filter((o) => o !== r.value),
+    otherAllergies: profile.otherAllergies.filter((o) => o !== r.value),
+  };
 }
 
 /** R08 "Or cook it simply": plain methods for the most urgent item. */
 export function simpleMethods(item: string) {
   const name = capitalize(item);
   return [
-    { title: `Steamed ${item} with tomato and onion`, minutes: 15 },
-    { title: `${name} salad (ensalada)`, minutes: 10 },
-    { title: `Stir-fried ${item} with garlic`, minutes: 12 },
+    { title: `Fried ${item} with garlic`, minutes: 15 },
+    { title: `Inihaw na ${item} (grilled)`, minutes: 25 },
+    { title: `${name} sinabawan (simple ginger soup)`, minutes: 30 },
   ];
+}
+
+/**
+ * UC-4.3: when the main (first) ingredient is pricier than usual and the
+ * recipe names a cheaper swap that fits the profile, how much it saves.
+ */
+export function swapFor(recipe: Recipe, pantry: PantryItem[], profile: Profile, servings: number) {
+  if (!recipe.swap) return null;
+  const main = recipe.ingredients[0]?.item;
+  const info = main ? priceInfo(main) : null;
+  const target = getRecipe(recipe.swap);
+  if (!info || info.change < NOTABLE_CHANGE || !target || blockedBy(target, profile).length > 0) return null;
+  const from = viewRecipe(recipe, pantry, servings);
+  const to = viewRecipe(target, pantry, servings);
+  const saves = from.cost - to.cost;
+  if (saves < 20) return null;
+  const shared = target.ingredients.map((i) => i.item).filter((i) => recipe.ingredients.some((r) => r.item === i));
+  return { from, to, saves, main, change: info.change, shared, toMainInPantry: to.lines[0]?.have !== 'none' };
 }

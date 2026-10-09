@@ -9,14 +9,14 @@ import { ThemedText } from '@/components/themed-text';
 import { Fonts, Spacing } from '@/constants/theme';
 import { ALLERGY_INFO, DIET_INFO, type Allergy, type Diet } from '@/db/profile';
 import { peso } from '@/domain/prices';
-import { getRecipe, viewRecipe } from '@/domain/recipes';
+import { ingredientsFor, understands } from '@/domain/custom-terms';
+import { getRecipe, INGREDIENT_KEYS, viewRecipe } from '@/domain/recipes';
 import { useTheme } from '@/hooks/use-theme';
 
 type IconName = keyof typeof Ionicons.glyphMap;
 
 const DIET_ICON: Record<Diet, IconName> = {
   no_pork: 'ban-outline',
-  vegetarian: 'leaf-outline',
   halal: 'moon-outline',
   low_salt: 'water-outline',
 };
@@ -80,15 +80,96 @@ export function StepTitle({ title, body }: { title: string; body: string }) {
   );
 }
 
-/** H01: dietary needs, pick all that apply. */
-export function DietStep({ value, onChange }: { value: Diet[]; onChange: (v: Diet[]) => void }) {
+/**
+ * Free-text entries, comma-separated, saved on the phone. Shows what each one
+ * will hide, or that the app can't filter by it (it's still saved and shown).
+ */
+export function OtherInput({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string[];
+  onChange: (v: string[]) => void;
+  placeholder: string;
+}) {
+  const theme = useTheme();
+  const [text, setText] = useState(value.join(', '));
+  const terms = text.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
+  const hidden = [...new Set(terms.flatMap((t) => [...ingredientsFor(t, INGREDIENT_KEYS)]))];
+  const unknown = terms.filter((t) => !understands(t, INGREDIENT_KEYS));
+  return (
+    <View style={{ gap: Spacing.one + 2 }}>
+      <TextInput
+        autoFocus={value.length === 0}
+        value={text}
+        onChangeText={(t) => {
+          setText(t);
+          onChange(t.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean));
+        }}
+        placeholder={placeholder}
+        placeholderTextColor={theme.textSecondary}
+        style={[styles.input, { borderColor: theme.tint, color: theme.text, backgroundColor: theme.backgroundElement }]}
+      />
+      {hidden.length > 0 && (
+        <ThemedText type="caption" themeColor="fresh">
+          I&apos;ll hide dishes with {hidden.slice(0, 6).join(', ')}
+          {hidden.length > 6 ? ' and more' : ''}.
+        </ThemedText>
+      )}
+      {unknown.length > 0 && (
+        <ThemedText type="caption" themeColor="textSecondary">
+          Saved, but I can&apos;t filter dishes by “{unknown.join('”, “')}” yet.
+        </ThemedText>
+      )}
+      <ThemedText type="caption" themeColor="textSecondary">
+        Separate with commas. Saved on this phone, works offline.
+      </ThemedText>
+    </View>
+  );
+}
+
+/** H01: dietary needs, pick all that apply, plus typed-in ones. */
+export function DietStep({
+  value,
+  other,
+  onChange,
+  onOtherChange,
+}: {
+  value: Diet[];
+  other: string[];
+  onChange: (v: Diet[]) => void;
+  onOtherChange: (v: string[]) => void;
+}) {
+  const [typing, setTyping] = useState(other.length > 0);
   const toggle = (d: Diet) => onChange(value.includes(d) ? value.filter((x) => x !== d) : [...value, d]);
+  const none = value.length === 0 && other.length === 0 && !typing;
   return (
     <View style={styles.list}>
-      <CheckRow icon="happy-outline" label="No restrictions" checked={value.length === 0} onPress={() => onChange([])} />
+      <CheckRow
+        icon="happy-outline"
+        label="No restrictions"
+        checked={none}
+        onPress={() => {
+          onChange([]);
+          onOtherChange([]);
+          setTyping(false);
+        }}
+      />
       {(Object.keys(DIET_INFO) as Diet[]).map((d) => (
         <CheckRow key={d} icon={DIET_ICON[d]} label={DIET_INFO[d].label} hint={DIET_INFO[d].hint} checked={value.includes(d)} onPress={() => toggle(d)} />
       ))}
+      <CheckRow
+        icon="ellipsis-horizontal"
+        label="Other"
+        hint="Type it in, e.g. no beef, walang baboy"
+        checked={typing}
+        onPress={() => {
+          if (typing) onOtherChange([]);
+          setTyping(!typing);
+        }}
+      />
+      {typing && <OtherInput value={other} onChange={onOtherChange} placeholder="e.g. no beef, no red meat" />}
     </View>
   );
 }
@@ -105,9 +186,7 @@ export function AllergyStep({
   onChange: (v: Allergy[]) => void;
   onOtherChange: (v: string[]) => void;
 }) {
-  const theme = useTheme();
   const [typing, setTyping] = useState(other.length > 0);
-  const [text, setText] = useState(other.join(', '));
   const toggle = (a: Allergy) => onChange(value.includes(a) ? value.filter((x) => x !== a) : [...value, a]);
   const none = value.length === 0 && other.length === 0 && !typing;
   return (
@@ -120,7 +199,6 @@ export function AllergyStep({
           onChange([]);
           onOtherChange([]);
           setTyping(false);
-          setText('');
         }}
       />
       {(Object.keys(ALLERGY_INFO) as Allergy[]).map((a) => (
@@ -132,26 +210,11 @@ export function AllergyStep({
         hint="Type it in"
         checked={typing}
         onPress={() => {
-          if (typing) {
-            onOtherChange([]);
-            setText('');
-          }
+          if (typing) onOtherChange([]);
           setTyping(!typing);
         }}
       />
-      {typing && (
-        <TextInput
-          autoFocus
-          value={text}
-          onChangeText={(t) => {
-            setText(t);
-            onOtherChange(t.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean));
-          }}
-          placeholder="e.g. mango, squid"
-          placeholderTextColor={theme.textSecondary}
-          style={[styles.input, { borderColor: theme.backgroundSelected, color: theme.text, backgroundColor: theme.backgroundElement }]}
-        />
-      )}
+      {typing && <OtherInput value={other} onChange={onOtherChange} placeholder="e.g. squid, sili, kamatis" />}
       <Note icon="alert-circle-outline" tone="amber">
         Always double-check labels for severe allergies.
       </Note>

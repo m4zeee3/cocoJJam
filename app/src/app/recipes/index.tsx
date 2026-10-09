@@ -6,14 +6,17 @@ import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Dot } from '@/components/badges';
+import { BudgetPill } from '@/components/budget';
 import { Button } from '@/components/button';
 import { Card } from '@/components/card';
+import { ChoicePills } from '@/components/controls';
 import { FoodArt } from '@/components/food-art';
 import { QuickQuestions } from '@/components/quick-questions';
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
 import { listActivePantry, type PantryItem } from '@/db/pantry';
 import { ALLERGY_INFO, getProfile, profileSummary, saveProfile, type Profile } from '@/db/profile';
+import { budgetFlag, budgetFrom, spentThisWeek, type Budget } from '@/domain/budget';
 import { urgencyGroup } from '@/domain/cook-by';
 import { peso, priceMonth } from '@/domain/prices';
 import {
@@ -32,8 +35,8 @@ import { openScanner } from '@/lib/open-scanner';
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 async function load(db: SQLiteDatabase) {
-  const [pantry, profile] = await Promise.all([listActivePantry(db), getProfile(db)]);
-  return { pantry, profile };
+  const [pantry, profile, spent] = await Promise.all([listActivePantry(db), getProfile(db), spentThisWeek(db)]);
+  return { pantry, profile, spent };
 }
 
 function relaxLabel(r: Restriction) {
@@ -42,7 +45,6 @@ function relaxLabel(r: Restriction) {
   return {
     no_pork: 'Allow pork this time',
     halal: 'Allow pork this time',
-    vegetarian: 'Allow meat and fish this time',
     low_salt: 'Allow salty seasonings this time',
   }[r.value];
 }
@@ -52,7 +54,8 @@ export default function DishesScreen() {
   const { focus } = useLocalSearchParams<{ focus?: string }>();
   const db = useSQLiteContext();
   const theme = useTheme();
-  const [data, reload] = useFocusQuery(load, null as { pantry: PantryItem[]; profile: Profile | null } | null);
+  const [data, reload] = useFocusQuery(load, null as { pantry: PantryItem[]; profile: Profile | null; spent: number } | null);
+  const [sort, setSort] = useState<'match' | 'cheapest'>('match');
   const [meal, setMeal] = useState<Profile | null>(getMealProfile());
   const [asking, setAsking] = useState<'profile' | 'meal' | null>(null);
 
@@ -60,7 +63,11 @@ export default function DishesScreen() {
 
   const profile = meal ?? data.profile;
   const active = profile ?? DEFAULT_PROFILE;
-  const { matches, relax } = recommend(data.pantry, active, focus);
+  const { matches: ranked, relax } = recommend(data.pantry, active, focus);
+  // UC-3.9: "Cheapest first" sorts by what still has to be bought.
+  const matches = sort === 'cheapest' ? [...ranked].sort((a, b) => a.toBuy - b.toBuy || a.cost - b.cost) : ranked;
+  // The saved weekly budget, never a per-meal question (UC-3.8).
+  const budget = budgetFrom(data.profile?.weekly_budget_php, data.spent);
   const urgent = data.pantry.filter((p) => urgencyGroup(p.cook_by) !== 'Fresh').slice(0, 3);
 
   function applyMealProfile(p: Profile | null) {
@@ -123,11 +130,28 @@ export default function DishesScreen() {
 
         {matches.length > 0 ? (
           <>
+            {budget && (
+              <View style={styles.inline}>
+                <Ionicons name="wallet-outline" size={13} color={theme.textSecondary} />
+                <ThemedText type="caption" themeColor="textSecondary">
+                  {peso(budget.left)} left of {peso(budget.weekly)} this week
+                </ThemedText>
+              </View>
+            )}
+            <ChoicePills
+              value={sort}
+              onChange={setSort}
+              options={[
+                { value: 'match', label: 'Best match' },
+                { value: 'cheapest', label: 'Cheapest first' },
+              ]}
+            />
             <ThemedText type="caption" themeColor="textSecondary">
-              {matches.length} dish{matches.length === 1 ? '' : 'es'} · ranked by how many of your urgent items they use
+              {matches.length} dish{matches.length === 1 ? '' : 'es'} ·{' '}
+              {sort === 'cheapest' ? 'cheapest to buy for first' : 'ranked by how many of your urgent items they use'}
             </ThemedText>
-            {matches.map((r, i) => (
-              <DishCard key={r.id} recipe={r} best={i === 0} />
+            {matches.map((r) => (
+              <DishCard key={r.id} recipe={r} best={r.id === ranked[0]?.id} budget={budget} />
             ))}
             <ThemedText type="caption" themeColor="textSecondary" style={styles.center}>
               Prices are estimates for {active.household_size} servings at {priceMonth('long')} prices (NCR)
@@ -188,8 +212,9 @@ function RoundButton({ icon, label, onPress }: { icon: keyof typeof Ionicons.gly
   );
 }
 
-function DishCard({ recipe, best }: { recipe: RecipeView; best: boolean }) {
+function DishCard({ recipe, best, budget }: { recipe: RecipeView; best: boolean; budget: Budget | null }) {
   const theme = useTheme();
+  const flag = budgetFlag(recipe.toBuy, budget);
   return (
     <Pressable
       onPress={() =>
@@ -199,11 +224,16 @@ function DishCard({ recipe, best }: { recipe: RecipeView; best: boolean }) {
       <Card style={[styles.dish, best && { borderColor: theme.tint, borderWidth: 1.5 }]}>
         <FoodArt size={72} />
         <View style={{ flex: 1, gap: 2 }}>
-          {best && (
-            <View style={[styles.best, { backgroundColor: theme.dangerSoft }]}>
-              <ThemedText type="caption" themeColor="danger">
-                Best match
-              </ThemedText>
+          {(best || flag) && (
+            <View style={styles.inline}>
+              {best && (
+                <View style={[styles.best, { backgroundColor: theme.dangerSoft }]}>
+                  <ThemedText type="caption" themeColor="danger">
+                    Best match
+                  </ThemedText>
+                </View>
+              )}
+              <BudgetPill flag={flag} />
             </View>
           )}
           <ThemedText type="smallBold">{recipe.title}</ThemedText>
@@ -216,6 +246,9 @@ function DishCard({ recipe, best }: { recipe: RecipeView; best: boolean }) {
           <View style={styles.inline}>
             <ThemedText type="label" themeColor="tintText">
               ≈ {peso(recipe.cost)}
+            </ThemedText>
+            <ThemedText type="caption" themeColor="textSecondary">
+              · {recipe.toBuy < 1 ? 'all in your pantry' : `${peso(recipe.toBuy)} to buy`}
             </ThemedText>
             <Ionicons name="time-outline" size={12} color={theme.textSecondary} style={{ marginLeft: Spacing.two }} />
             <ThemedText type="caption" themeColor="textSecondary">
@@ -285,7 +318,7 @@ function NoMatches({
             {simpleMethods(focus).map((m, i) => (
               <View key={m.title} style={[styles.simpleRow, i > 0 && { borderTopWidth: 1, borderTopColor: theme.backgroundSelected }]}>
                 <View style={[styles.simpleIcon, { backgroundColor: theme.freshSoft }]}>
-                  <Ionicons name="leaf-outline" size={14} color={theme.fresh} />
+                  <Ionicons name="flame-outline" size={14} color={theme.fresh} />
                 </View>
                 <View style={{ flex: 1 }}>
                   <ThemedText type="smallBold">{m.title}</ThemedText>

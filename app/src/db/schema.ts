@@ -78,6 +78,25 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX palengke_by_day ON palengke_checks (created_at);
   `,
+  // 4: Auto Shopping List (UC-9.1), kept on the phone only.
+  `
+  CREATE TABLE shopping_items (
+    id TEXT PRIMARY KEY NOT NULL,
+    created_at INTEGER NOT NULL,
+    item TEXT NOT NULL,             -- price-table key, e.g. bangus, sitaw
+    name TEXT NOT NULL,             -- display name
+    qty REAL NOT NULL,
+    unit TEXT NOT NULL,
+    amount TEXT NOT NULL,           -- "1½ bundles, sliced"
+    price REAL,                     -- estimate at this month's prices; null = no price data
+    recipe_id TEXT,
+    recipe_title TEXT,
+    checked INTEGER NOT NULL DEFAULT 0,
+    checked_at INTEGER,
+    moved_pantry_id TEXT,           -- set when moved to the pantry (its paid price counts there)
+    deleted INTEGER NOT NULL DEFAULT 0
+  );
+  `,
 ];
 
 export async function migrate(db: SQLiteDatabase) {

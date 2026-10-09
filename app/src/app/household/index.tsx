@@ -34,7 +34,8 @@ function EditHousehold({ initial, isNew }: { initial: Profile; isNew: boolean })
   const [editing, setEditing] = useState<Editing>(null);
   const set = (patch: Partial<Profile>) => setProfile((p) => ({ ...p, ...patch }));
 
-  const diets = profile.diets.length ? profile.diets.map((d) => DIET_INFO[d].label).join(', ') : 'No restrictions';
+  const dietList = [...profile.diets.map((d) => DIET_INFO[d].label), ...profile.otherDiets.map((o) => o.charAt(0).toUpperCase() + o.slice(1))];
+  const diets = dietList.length ? dietList.join(', ') : 'No restrictions';
   const allergyList = [...profile.allergies.map((a) => ALLERGY_INFO[a].label), ...profile.otherAllergies.map((o) => o[0].toUpperCase() + o.slice(1))];
   const allergies = allergyList.length ? allergyList.join(', ') : 'None';
 
@@ -91,7 +92,12 @@ function EditHousehold({ initial, isNew }: { initial: Profile; isNew: boolean })
         {editing === 'diet' && (
           <>
             <StepTitle title="Dietary needs" body="Pick all that apply." />
-            <DietStep value={profile.diets} onChange={(diets) => set({ diets })} />
+            <DietStep
+              value={profile.diets}
+              other={profile.otherDiets}
+              onChange={(diets) => set({ diets })}
+              onOtherChange={(otherDiets) => set({ otherDiets })}
+            />
           </>
         )}
         {editing === 'allergy' && (

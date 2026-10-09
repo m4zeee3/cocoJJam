@@ -14,6 +14,7 @@ import { ChoicePills, Sheet } from '@/components/controls';
 import { BoughtSheet, PalengkeHeader, PriceBar, VerdictCard, verdictColor } from '@/components/palengke';
 import { ThemedText } from '@/components/themed-text';
 import { Fonts, Spacing } from '@/constants/theme';
+import { PRICE_SOURCE } from '@/domain/prices';
 import { addCheck, buyFromCheck, listTripChecks, renameStall, type PalengkeCheck } from '@/db/palengke';
 import {
   judge,
@@ -28,7 +29,9 @@ import {
 import type { Stage } from '@/domain/types';
 import { useTheme } from '@/hooks/use-theme';
 import { pickPhoto } from '@/lib/open-scanner';
+import { FISH_SPECIES, isGenericFish } from '@/domain/fish';
 import { classify, DEMO_MODE, type Guess } from '@/ml/classifier';
+import { viewNote } from '@/ml/labels';
 
 const UNITS: { value: VendorUnit; label: string }[] = (Object.keys(VENDOR_UNIT_LABEL) as VendorUnit[]).map((value) => ({
   value,
@@ -37,7 +40,7 @@ const UNITS: { value: VendorUnit; label: string }[] = (Object.keys(VENDOR_UNIT_L
 
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-type Phase = 'identifying' | 'pickItem' | 'price' | 'verdict';
+type Phase = 'identifying' | 'pickItem' | 'species' | 'price' | 'verdict';
 
 /** Palengke check: identify (M02), cut (M03), price, verdict (M04–M08), bought (M09), compare? (M10). */
 export default function PalengkeCheckScreen() {
@@ -53,6 +56,7 @@ function Check({ photo }: { photo: string }) {
   const [guesses, setGuesses] = useState<Guess[]>([]);
   const [item, setItem] = useState('');
   const [stage, setStage] = useState<Stage>('good');
+  const [note, setNote] = useState<string | null>(null);
   const [cut, setCut] = useState<string | null>(null);
   const [askCut, setAskCut] = useState(false);
   const [priceText, setPriceText] = useState('');
@@ -71,17 +75,20 @@ function Check({ photo }: { photo: string }) {
     classify(photo).then(
       (top) => {
         setGuesses(top);
-        if (top[0] && top[0].confidence >= 0.5) choose(top[0].item, top[0].stage);
+        if (top[0] && top[0].confidence >= 0.5) choose(top[0].item, top[0].stage, viewNote(top[0]));
         else setPhase('pickItem');
       },
       (e: Error) => setError(e.message),
     );
   }, [photo]);
 
-  function choose(name: string, s: Stage | null) {
+  function choose(name: string, s: Stage | null, n?: string | null) {
     setItem(name);
     // The placeholder model has no stages yet, so assume Good.
     setStage(s ?? 'good');
+    setNote(n ?? null);
+    // The model can't tell fish species apart; the reference price needs it.
+    if (isGenericFish(name)) return setPhase('species');
     setPhase('price');
     if (variantsOf(name)) setAskCut(true); // UC-6.4
   }
@@ -149,7 +156,7 @@ function Check({ photo }: { photo: string }) {
               Which item is this?
             </ThemedText>
             {guesses.map((g) => (
-              <Pressable key={g.label} onPress={() => choose(g.item, g.stage)} style={styles.radioRow}>
+              <Pressable key={g.label} onPress={() => choose(g.item, g.stage, viewNote(g))} style={styles.radioRow}>
                 <Ionicons name="radio-button-off" size={18} color={theme.textSecondary} />
                 <ThemedText type="smallBold">{capitalize(g.item)}</ThemedText>
               </Pressable>
@@ -165,11 +172,25 @@ function Check({ photo }: { photo: string }) {
             <View style={{ flex: 1 }}>
               <ThemedText type="smallBold">{displayName}</ThemedText>
               <ThemedText type="caption" themeColor="textSecondary">
-                {phase === 'verdict' && check ? `1 ${unitShort(unit)} · identified on-device` : 'Identified on-device'}
+                {[phase === 'verdict' && check ? `1 ${unitShort(unit)}` : null, note ?? 'Identified on-device'].filter(Boolean).join(' · ')}
               </ThemedText>
             </View>
             <StagePill stage={stage} />
           </Card>
+        )}
+
+        {phase === 'species' && (
+          <View style={{ gap: Spacing.two }}>
+            <ThemedText type="label">Which fish is it?</ThemedText>
+            <ChoicePills
+              options={FISH_SPECIES}
+              value={null}
+              onChange={(species) => {
+                setItem(species);
+                setPhase('price');
+              }}
+            />
+          </View>
         )}
 
         {phase === 'price' && (
@@ -184,7 +205,7 @@ function Check({ photo }: { photo: string }) {
                 </ThemedText>
                 <PriceBar range={range} />
                 <ThemedText type="caption" themeColor="textSecondary">
-                  NCR reference · as of {REFERENCE_DATE}
+                  {PRICE_SOURCE} · as of {REFERENCE_DATE}
                 </ThemedText>
               </Card>
             ) : (
@@ -229,7 +250,7 @@ function Check({ photo }: { photo: string }) {
               </View>
               {range && verdict.band && <PriceBar range={range} price={check.price} color={verdictColor(verdict.kind)} />}
               <ThemedText type="caption" themeColor="textSecondary" style={{ paddingBottom: Spacing.two }}>
-                NCR reference · as of {REFERENCE_DATE}
+                {PRICE_SOURCE} · as of {REFERENCE_DATE}
               </ThemedText>
             </Card>
             {verdict.haggleLine && (

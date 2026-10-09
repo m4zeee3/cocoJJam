@@ -1,10 +1,9 @@
-import Ionicons from '@expo/vector-icons/Ionicons';
+import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { Pill } from '@/components/badges';
 import { Button } from '@/components/button';
 import { useGoogleSignIn } from '@/components/sign-in-flow';
 import { ThemedText } from '@/components/themed-text';
@@ -27,24 +26,18 @@ export default function WelcomeScreen() {
 
   return (
     <SafeAreaView edges={['top', 'bottom']} style={[styles.safe, { backgroundColor: theme.background }]}>
-      <View style={[styles.hero, { backgroundColor: theme.highlight }]}>
-        <View style={[styles.circle, { backgroundColor: '#FFE1CC' }]}>
-          <Ionicons name="restaurant-outline" size={72} color={theme.tint} />
-        </View>
-        <View style={[styles.floatPill, { top: 40, right: 28 }]}>
-          <Pill label="Cook today" tone={{ fg: 'danger', bg: 'backgroundElement' }} />
-        </View>
-        <View style={[styles.floatPill, { bottom: 36, left: 28 }]}>
-          <Pill label="Fresh · 3 days" tone={{ fg: 'fresh', bg: 'backgroundElement' }} />
-        </View>
-        <Ionicons name="fish" size={30} color="#7BA7D9" style={{ position: 'absolute', top: 30, left: 30 }} />
-        <Ionicons name="leaf" size={26} color={theme.fresh} style={{ position: 'absolute', bottom: 34, right: 34 }} />
-      </View>
+      {/* Illustration exported from the FigJam 02 Welcome frame (assets/images/welcome-hero.png, 3x) */}
+      <Image
+        source={require('@/assets/images/welcome-hero.png')}
+        style={styles.hero}
+        contentFit="contain"
+        accessibilityLabel="A bowl of soup with a fish, a tomato and herbs, labelled Cook today and Fresh, 3 days"
+      />
 
       <View style={styles.body}>
         <ThemedText type="title">Know what&apos;s fresh. Cook before it spoils.</ThemedText>
         <ThemedText type="small" themeColor="textSecondary">
-          Scan raw food, track your pantry and get budget-friendly dishes. All on your phone.
+          Scan raw beef, pork, chicken or fish, track your pantry and get budget-friendly dishes. All on your phone.
         </ThemedText>
       </View>
 
@@ -68,9 +61,7 @@ export default function WelcomeScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1 },
-  hero: { margin: Spacing.three + 4, height: 300, borderRadius: 28, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
-  circle: { width: 200, height: 200, borderRadius: 100, alignItems: 'center', justifyContent: 'center' },
-  floatPill: { position: 'absolute' },
+  hero: { marginHorizontal: Spacing.three + 4, marginTop: Spacing.three, width: undefined, aspectRatio: 342 / 330 },
   body: { paddingHorizontal: Spacing.three + 4, gap: Spacing.two },
   footer: { marginTop: 'auto', paddingHorizontal: Spacing.three + 4, paddingBottom: Spacing.two, gap: Spacing.two + 2 },
 });

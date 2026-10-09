@@ -6,6 +6,9 @@ import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Pill } from '@/components/badges';
+import { AddToListSheet } from '@/components/add-to-list-sheet';
+import { BudgetNote } from '@/components/budget';
+import { BreakdownSheet, ChangePill, SwapSheet, WhySheet } from '@/components/price-sheets';
 import { Button } from '@/components/button';
 import { Card } from '@/components/card';
 import { Stepper, Toast } from '@/components/controls';
@@ -15,8 +18,9 @@ import { Fonts, Spacing } from '@/constants/theme';
 import { isBookmarked, toggleBookmark } from '@/db/bookmarks';
 import { listActivePantry, type PantryItem } from '@/db/pantry';
 import { getProfile, profileSummary, type Profile } from '@/db/profile';
+import { budgetFlag, budgetFrom, spentThisWeek } from '@/domain/budget';
 import { peso, priceMonth } from '@/domain/prices';
-import { getRecipe, viewRecipe, type Line } from '@/domain/recipes';
+import { DEFAULT_PROFILE, getRecipe, swapFor, viewRecipe, type Line } from '@/domain/recipes';
 import { useFocusQuery } from '@/hooks/use-pantry';
 import { useTheme } from '@/hooks/use-theme';
 import { getMealProfile } from '@/lib/meal-profile';
@@ -32,17 +36,21 @@ export default function RecipeDetailScreen() {
   const theme = useTheme();
   const load = useCallback(
     async (db: SQLiteDatabase) => {
-      const [pantry, profile, saved, session] = await Promise.all([
+      const [pantry, profile, saved, session, spent] = await Promise.all([
         listActivePantry(db),
         getProfile(db),
         isBookmarked(db, id),
         getSession(db),
+        spentThisWeek(db),
       ]);
-      return { pantry, profile, saved, signedIn: !!session };
+      return { pantry, profile, saved, signedIn: !!session, spent };
     },
     [id],
   );
-  const [data] = useFocusQuery(load, null as { pantry: PantryItem[]; profile: Profile | null; saved: boolean; signedIn: boolean } | null);
+  const [data] = useFocusQuery(
+    load,
+    null as { pantry: PantryItem[]; profile: Profile | null; saved: boolean; signedIn: boolean; spent: number } | null,
+  );
 
   if (!recipe) {
     return (
@@ -65,6 +73,8 @@ export default function RecipeDetailScreen() {
       initialServings={start}
       initiallySaved={data.saved}
       signedIn={data.signedIn}
+      weeklyBudget={data.profile?.weekly_budget_php ?? null}
+      spent={data.spent}
     />
   );
 }
@@ -76,6 +86,8 @@ function Detail({
   initialServings,
   initiallySaved,
   signedIn,
+  weeklyBudget,
+  spent,
 }: {
   recipeId: string;
   pantry: PantryItem[];
@@ -83,6 +95,8 @@ function Detail({
   initialServings: number;
   initiallySaved: boolean;
   signedIn: boolean;
+  weeklyBudget: number | null;
+  spent: number;
 }) {
   const db = useSQLiteContext();
   const theme = useTheme();
@@ -91,7 +105,10 @@ function Detail({
   const [servings, setServings] = useState(initialServings);
   const [saved, setSaved] = useState(initiallySaved);
   const [toast, setToast] = useState<string | null>(null);
-  const hideToast = useCallback(() => setToast(null), []);
+  const [sheet, setSheet] = useState<
+    { kind: 'breakdown' } | { kind: 'why'; item: string } | { kind: 'swap' } | { kind: 'list' } | null
+  >(null);
+  const hideToast = useCallback(() => setToast(null), [setToast]);
   // Community bookmark count (UC-3.5), when the sync server is reachable.
   const [community, setCommunity] = useState<number | null>(null);
   useEffect(() => {
@@ -103,6 +120,12 @@ function Detail({
   }, [recipeId]);
 
   const view = viewRecipe(recipe, pantry, servings);
+  // UC-3.8: warn against the saved weekly budget; the dish stays cookable.
+  const budget = budgetFrom(weeklyBudget, spent);
+  const flag = budgetFlag(view.toBuy, budget);
+  // UC-4.3: a cheaper dish when the main ingredient is pricier than usual.
+  const swap = swapFor(recipe, pantry, profile ?? DEFAULT_PROFILE, servings);
+  const missingCount = view.lines.filter((l) => l.have !== 'all').length;
   const base = viewRecipe(recipe, pantry, recipe.servings);
   const scaled = servings !== recipe.servings;
   const inPantry = view.lines.filter((l) => l.have !== 'none').length;
@@ -180,15 +203,39 @@ function Detail({
               </View>
               <ThemedText type="title" themeColor="tintText" style={{ fontSize: 24 }}>
                 ≈ {peso(view.cost)}
+                {view.unpriced > 0 ? '+' : ''}
               </ThemedText>
             </View>
-            <ThemedText type="caption" themeColor="textSecondary">
-              {view.toBuy < 1
-                ? 'Everything is already in your pantry'
-                : `${peso(view.toBuy)} to buy · the rest is already in your pantry`}
-              {view.partialCost ? ' · some items have no price data' : ''}
-            </ThemedText>
+            <View style={styles.between}>
+              <ThemedText type="caption" themeColor="textSecondary" style={{ flex: 1 }}>
+                {view.toBuy < 1
+                  ? 'Everything is already in your pantry'
+                  : `${peso(view.toBuy)} to buy · the rest is already in your pantry`}
+                {view.unpriced > 0 ? ` · partial estimate, leaves out ${view.unpriced}` : ''}
+              </ThemedText>
+              <Pressable onPress={() => setSheet({ kind: 'breakdown' })} hitSlop={8} style={styles.inline}>
+                <ThemedText type="label" themeColor="tintText">
+                  Breakdown
+                </ThemedText>
+                <Ionicons name="chevron-forward" size={14} color={theme.tintText} />
+              </Pressable>
+            </View>
           </Card>
+          {swap && (
+            <Pressable onPress={() => setSheet({ kind: 'swap' })} accessibilityRole="button">
+              <Card tone="freshSoft" style={styles.swapBanner}>
+                <Ionicons name="swap-horizontal" size={18} color={theme.fresh} />
+                <View style={{ flex: 1 }}>
+                  <ThemedText type="smallBold">Save about {peso(swap.saves)}</ThemedText>
+                  <ThemedText type="caption" themeColor="textSecondary">
+                    {swap.to.title} instead · {swap.main} is pricier this month
+                  </ThemedText>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={theme.textSecondary} />
+              </Card>
+            </Pressable>
+          )}
+          <BudgetNote flag={flag} toBuy={view.toBuy} budget={budget} />
 
           <View style={{ gap: Spacing.two }}>
             <View style={styles.between}>
@@ -199,7 +246,7 @@ function Detail({
             </View>
             <Card style={{ gap: 0, paddingVertical: Spacing.one }}>
               {view.lines.map((l, i) => (
-                <IngredientRow key={l.item} line={l} divider={i > 0} />
+                <IngredientRow key={l.item} line={l} divider={i > 0} onWhy={() => setSheet({ kind: 'why', item: l.item })} />
               ))}
             </Card>
           </View>
@@ -230,13 +277,48 @@ function Detail({
         </View>
       </ScrollView>
 
+      {sheet?.kind === 'breakdown' && <BreakdownSheet view={view} onClose={() => setSheet(null)} />}
+      {sheet?.kind === 'list' && (
+        <AddToListSheet
+          view={view}
+          budget={budget}
+          onClose={() => setSheet(null)}
+          onAdded={(n) => {
+            setSheet(null);
+            setToast(n > 0 ? `Added ${n} item${n === 1 ? '' : 's'} to your shopping list.` : 'Already on your shopping list.');
+          }}
+        />
+      )}
+      {sheet?.kind === 'why' && <WhySheet item={sheet.item} onClose={() => setSheet(null)} />}
+      {sheet?.kind === 'swap' && swap && (
+        <SwapSheet
+          swap={swap}
+          fits={profile && profileSummary(profile).includes('·') ? profileSummary(profile).split(' · ').slice(1).join(', ').toLowerCase() : null}
+          onClose={() => setSheet(null)}
+        />
+      )}
+
       <View style={[styles.toastSlot, { bottom: 96 + insets.bottom }]} pointerEvents="box-none">
         <Toast message={toast} onHide={hideToast} />
       </View>
 
       <View style={[styles.footer, { paddingBottom: Spacing.three + insets.bottom, backgroundColor: theme.backgroundElement, borderTopColor: theme.backgroundSelected }]}>
-        {/* TODO: "Add N to list" once the Auto Shopping List (Module 9) exists. */}
-        <Button title={saved ? 'Saved' : 'Bookmark'} icon={saved ? 'bookmark' : 'bookmark-outline'} variant={saved ? 'soft' : 'primary'} onPress={bookmark} />
+        <View style={styles.footerRow}>
+          <Button
+            title={saved ? 'Saved' : 'Bookmark'}
+            icon={saved ? 'bookmark' : 'bookmark-outline'}
+            variant={saved ? 'soft' : 'secondary'}
+            onPress={bookmark}
+          />
+          {/* N03 / UC-9.1 */}
+          <View style={{ flex: 1 }}>
+            {missingCount > 0 ? (
+              <Button title={`Add ${missingCount} to list`} icon="list" onPress={() => setSheet({ kind: 'list' })} />
+            ) : (
+              <Button title="All in your pantry" icon="checkmark" variant="soft" onPress={() => {}} disabled />
+            )}
+          </View>
+        </View>
       </View>
     </View>
   );
@@ -273,12 +355,18 @@ function Meta({ icon, text }: { icon: keyof typeof Ionicons.glyphMap; text: stri
   );
 }
 
-function IngredientRow({ line, divider }: { line: Line; divider: boolean }) {
+function IngredientRow({ line, divider, onWhy }: { line: Line; divider: boolean; onWhy: () => void }) {
   const theme = useTheme();
   return (
     <View style={[styles.ingredient, divider && { borderTopWidth: 1, borderTopColor: theme.backgroundSelected }]}>
       <View style={{ flex: 1 }}>
-        <ThemedText type="smallBold">{line.name}</ThemedText>
+        <View style={styles.inline}>
+          <ThemedText type="smallBold">{line.name}</ThemedText>
+          {/* UC-4.2: tap the arrow to see why */}
+          <Pressable onPress={onWhy} hitSlop={8} accessibilityLabel={`Why ${line.name} costs more or less this month`}>
+            <ChangePill change={line.change} />
+          </Pressable>
+        </View>
         <ThemedText type="caption" themeColor="textSecondary">
           {line.amount}
         </ThemedText>
@@ -289,7 +377,7 @@ function IngredientRow({ line, divider }: { line: Line; divider: boolean }) {
         <Pill label={line.haveText ?? 'You have some'} tone={{ fg: 'amber', bg: 'amberSoft' }} />
       ) : (
         <ThemedText type="smallBold" style={{ fontFamily: Fonts.bold }}>
-          {line.cost == null ? 'No price' : peso(line.cost)}
+          {line.cost == null ? 'No price data' : peso(line.cost)}
         </ThemedText>
       )}
     </View>
@@ -308,9 +396,11 @@ const styles = StyleSheet.create({
   inline: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   between: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.two },
   divider: { height: 1, marginVertical: Spacing.one },
+  swapBanner: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three - 4 },
   ingredient: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, paddingVertical: Spacing.two + 2 },
   step: { flexDirection: 'row', gap: Spacing.three - 4, alignItems: 'flex-start' },
   stepNum: { width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', marginTop: 1 },
   toastSlot: { position: 'absolute', left: Spacing.three, right: Spacing.three },
+  footerRow: { flexDirection: 'row', gap: Spacing.two },
   footer: { position: 'absolute', left: 0, right: 0, bottom: 0, borderTopWidth: 1, paddingHorizontal: Spacing.three + 4, paddingTop: Spacing.three - 4 },
 });

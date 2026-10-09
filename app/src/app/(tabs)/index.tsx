@@ -2,25 +2,34 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { Image } from 'expo-image';
 import { Redirect, router } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
-import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 
 import { Dot, OnDeviceBadge, Pill, STAGE_COLOR, URGENCY_COLOR } from '@/components/badges';
+import { BudgetPill } from '@/components/budget';
 import { Button } from '@/components/button';
 import { Card } from '@/components/card';
 import { Screen } from '@/components/screen';
 import { ThemedText } from '@/components/themed-text';
+import { ItemIcon } from '@/components/item-icon';
 import { Fonts, Spacing } from '@/constants/theme';
 import { listRecentScans, type ScanRecord } from '@/db/history';
 import { listActivePantry, type PantryItem } from '@/db/pantry';
 import { getFlag, getProfile, setFlag, type Profile } from '@/db/profile';
 import { loadSamplePantry } from '@/db/sample';
+import { listFinished, monthRange } from '@/db/savings';
+import { budgetFlag, budgetFrom, spentThisWeek, type BudgetFlag } from '@/domain/budget';
 import { parseIsoDate, urgencyGroup } from '@/domain/cook-by';
 import { pantryValue, peso, priceMonth, priceWatch } from '@/domain/prices';
 import { DEFAULT_PROFILE, recommend, type RecipeView } from '@/domain/recipes';
+import { summarizeMonth, type MonthSummary } from '@/domain/savings';
 import { STORAGE_LABEL, UNIT_LABEL, type Urgency } from '@/domain/types';
 import { useFocusQuery } from '@/hooks/use-pantry';
+import { getSession } from '@/sync/session';
 import { useTheme } from '@/hooks/use-theme';
 import { openScanner } from '@/lib/open-scanner';
+
+const SCREEN_PAD = Spacing.three + 4; // matches components/screen.tsx
+const CARD_GAP = Spacing.three - 4;
 
 function greeting(now = new Date()) {
   const h = now.getHours();
@@ -37,19 +46,28 @@ async function loadHome(db: Parameters<typeof listActivePantry>[0]) {
     getFlag(db, 'household_setup_skipped'),
   ]);
   const firstLaunch = !(await getFlag(db, 'welcome_seen'));
-  return { items, scans, profile, offerSetup: !profile && !skipped, firstLaunch };
+  const { start, end } = monthRange(0);
+  const finished = await listFinished(db, start, end);
+  const savings = finished.length > 0 ? summarizeMonth(finished) : null;
+  const session = await getSession(db);
+  const spent = await spentThisWeek(db);
+  const firstName = session?.user.name?.split(' ')[0] || null;
+  return { items, scans, profile, offerSetup: !profile && !skipped, firstLaunch, savings, firstName, spent };
 }
 
 /** Home: Today dashboard. UC-12.1 first-time user, UC-12.2 returning user. */
 export default function HomeScreen() {
   const db = useSQLiteContext();
   const theme = useTheme();
-  const [{ items, scans, profile, offerSetup, firstLaunch }, reload] = useFocusQuery(loadHome, {
+  const [{ items, scans, profile, offerSetup, firstLaunch, savings, firstName, spent }, reload] = useFocusQuery(loadHome, {
     items: [] as PantryItem[],
     scans: [] as ScanRecord[],
     profile: null as Profile | null,
     offerSetup: false,
     firstLaunch: false,
+    savings: null as MonthSummary | null,
+    firstName: null as string | null,
+    spent: 0,
   });
 
   // 02 Welcome on first launch (UC-11.1).
@@ -60,7 +78,16 @@ export default function HomeScreen() {
     <Screen>
       <View style={styles.headerRow}>
         <View style={{ flex: 1, gap: Spacing.two }}>
-          <ThemedText type="title">{greeting()}!</ThemedText>
+          {firstName ? (
+            <View>
+              <ThemedText type="small" themeColor="textSecondary">
+                {greeting()},
+              </ThemedText>
+              <ThemedText type="title">{firstName}</ThemedText>
+            </View>
+          ) : (
+            <ThemedText type="title">{greeting()}!</ThemedText>
+          )}
           <OnDeviceBadge />
         </View>
         <Pressable
@@ -97,6 +124,8 @@ export default function HomeScreen() {
         items={items}
         scans={scans}
         profile={profile}
+        savings={savings}
+        spent={spent}
         onSample={() =>
           loadSamplePantry(db).then(reload, (e: Error) => Alert.alert('Could not load sample items', e.message))
         }
@@ -126,11 +155,15 @@ function Today({
   items,
   scans,
   profile,
+  savings,
+  spent,
   onSample,
 }: {
   items: PantryItem[];
   scans: ScanRecord[];
   profile: Profile | null;
+  savings: MonthSummary | null;
+  spent: number;
   onSample: () => void;
 }) {
   const groups = items.map((i) => ({ item: i, group: urgencyGroup(i.cook_by) }));
@@ -142,6 +175,9 @@ function Today({
     .filter((i) => parseIsoDate(i.cook_by) <= weekAhead)
     .reduce((sum, i) => sum + pantryValue(i), 0);
   const recipe = recommend(items, profile ?? DEFAULT_PROFILE, undefined, 1).matches[0];
+  // Two cards and a peek of the third, so the row reads as swipeable.
+  const { width: screenWidth } = useWindowDimensions();
+  const cardWidth = Math.round((screenWidth - SCREEN_PAD * 2 - CARD_GAP) / 2.25);
   const watch = priceWatch()[0];
 
   return (
@@ -167,9 +203,15 @@ function Today({
             </ThemedText>
           </Card>
         ) : (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.cards}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            snapToInterval={cardWidth + CARD_GAP}
+            decelerationRate="fast"
+            style={styles.cardsBleed}
+            contentContainerStyle={styles.cards}>
             {urgent.map((item) => (
-              <UseTodayCard key={item.id} item={item} />
+              <UseTodayCard key={item.id} item={item} width={cardWidth} />
             ))}
           </ScrollView>
         )}
@@ -178,7 +220,7 @@ function Today({
       {recipe && (
         <View style={styles.section}>
           <SectionHeader title="Cook before it spoils" link="More dishes" onPress={() => router.push('/recipes')} />
-          <RecipeCard recipe={recipe} />
+          <RecipeCard recipe={recipe} flag={budgetFlag(recipe.toBuy, budgetFrom(profile?.weekly_budget_php, spent))} />
         </View>
       )}
 
@@ -194,6 +236,8 @@ function Today({
       )}
 
       {watch && <PriceWatchCard item={watch.item} reason={watch.reason} />}
+
+      {savings && <SavingsCard savings={savings} />}
     </>
   );
 }
@@ -210,7 +254,10 @@ function SummaryCard({
   const theme = useTheme();
   const today = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase();
   return (
-    <Card tone="highlight" style={styles.summary}>
+    <View style={[styles.summary, { backgroundColor: theme.summary }]}>
+      {/* Decorative bubbles from the FigJam card */}
+      <View style={[styles.bubbleTop, { backgroundColor: theme.summaryBubble }]} />
+      <View style={[styles.bubbleBottom, { backgroundColor: theme.summaryBubble }]} />
       <ThemedText type="label" themeColor="tintText">
         TODAY · {today}
       </ThemedText>
@@ -244,20 +291,20 @@ function SummaryCard({
           </View>
         ))}
       </View>
-    </Card>
+    </View>
   );
 }
 
-function UseTodayCard({ item }: { item: PantryItem }) {
+function UseTodayCard({ item, width }: { item: PantryItem; width: number }) {
   const theme = useTheme();
   return (
     <Pressable onPress={() => router.push({ pathname: '/item/[id]', params: { id: item.id } })} accessibilityRole="button">
-      <Card style={styles.useCard}>
+      <Card style={[styles.useCard, { width }]}>
         <View style={[styles.thumb, { backgroundColor: theme.highlight }]}>
           {item.thumbnail_uri ? (
             <Image source={{ uri: item.thumbnail_uri }} style={StyleSheet.absoluteFill} contentFit="cover" />
           ) : (
-            <Ionicons name="nutrition-outline" size={36} color={theme.tint} />
+            <ItemIcon name={item.name} size={36} />
           )}
           <View style={styles.thumbPill}>
             <Pill label="Cook today" tone={{ fg: 'danger', bg: 'dangerSoft' }} />
@@ -267,13 +314,22 @@ function UseTodayCard({ item }: { item: PantryItem }) {
         <ThemedText type="caption" themeColor="textSecondary">
           {item.quantity} {UNIT_LABEL[item.unit] ?? item.unit} · {STORAGE_LABEL[item.storage]}
         </ThemedText>
+        {/* UC-2.7 */}
+        <Pressable
+          onPress={() => router.push({ pathname: '/recipes', params: { focus: item.name } })}
+          accessibilityRole="button"
+          style={({ pressed }) => [styles.cookButton, { backgroundColor: theme.highlight, opacity: pressed ? 0.8 : 1 }]}>
+          <ThemedText type="label" themeColor="tintText">
+            Cook with this
+          </ThemedText>
+        </Pressable>
       </Card>
     </Pressable>
   );
 }
 
 /** UC-3.1 top pick: the dish that uses the most urgent pantry items. */
-function RecipeCard({ recipe }: { recipe: RecipeView }) {
+function RecipeCard({ recipe, flag }: { recipe: RecipeView; flag: BudgetFlag | null }) {
   const theme = useTheme();
   return (
     <Pressable
@@ -301,6 +357,12 @@ function RecipeCard({ recipe }: { recipe: RecipeView }) {
           <ThemedText type="small" themeColor="textSecondary">
             {recipe.description}
           </ThemedText>
+          <View style={styles.metaItem}>
+            <ThemedText type="caption" themeColor="textSecondary">
+              {recipe.toBuy < 1 ? 'Everything is in your pantry' : `${peso(recipe.toBuy)} to buy · the rest is in your pantry`}
+            </ThemedText>
+            <BudgetPill flag={flag} />
+          </View>
           <View style={styles.meta}>
             <MetaItem icon="time-outline" text={`${recipe.minutes} min`} />
             <MetaItem icon="people-outline" text={`${recipe.servingsShown} servings`} />
@@ -355,24 +417,54 @@ function RecentScanRow({ scan, divider }: { scan: ScanRecord; divider: boolean }
   );
 }
 
+/** UC-8.1 teaser: this month's savings, opens the Savings screen. */
+function SavingsCard({ savings }: { savings: MonthSummary }) {
+  const theme = useTheme();
+  const month = new Date().toLocaleDateString('en-US', { month: 'long' }).toUpperCase();
+  return (
+    <Pressable onPress={() => router.push('/savings')} accessibilityRole="button">
+      <Card tone="freshSoft" style={styles.watch}>
+        <View style={[styles.scanIcon, { backgroundColor: theme.backgroundElement }]}>
+          <Ionicons name="leaf-outline" size={16} color={theme.fresh} />
+        </View>
+        <View style={{ flex: 1, gap: 2 }}>
+          <ThemedText type="label" themeColor="fresh">
+            SAVINGS · {month}
+          </ThemedText>
+          <ThemedText type="smallBold">
+            {peso(savings.saved)} saved · {savings.kgRescued.toFixed(1)} kg rescued
+          </ThemedText>
+          <ThemedText type="caption" themeColor="textSecondary">
+            {savings.wasted > 0 ? `${peso(savings.wasted)} wasted. Tap to see where.` : 'Nothing wasted this month.'}
+          </ThemedText>
+        </View>
+        <Ionicons name="chevron-forward" size={16} color={theme.textSecondary} />
+      </Card>
+    </Pressable>
+  );
+}
+
 /** UC-4.2: an item priced above its usual range this month. */
 function PriceWatchCard({ item, reason }: { item: string; reason: string }) {
   const theme = useTheme();
   return (
-    <Card style={styles.watch}>
-      <View style={[styles.scanIcon, { backgroundColor: theme.highlight }]}>
-        <Ionicons name="trending-up" size={16} color={theme.tint} />
-      </View>
-      <View style={{ flex: 1, gap: 2 }}>
-        <ThemedText type="label" themeColor="tintText">
-          PRICE WATCH · {priceMonth('long').toUpperCase()}
-        </ThemedText>
-        <ThemedText type="smallBold">{capitalize(item)} costs more this month</ThemedText>
-        <ThemedText type="caption" themeColor="textSecondary">
-          {reason}
-        </ThemedText>
-      </View>
-    </Card>
+    <Pressable onPress={() => router.push('/prices')} accessibilityRole="button">
+      <Card style={styles.watch}>
+        <View style={[styles.scanIcon, { backgroundColor: theme.highlight }]}>
+          <Ionicons name="trending-up" size={16} color={theme.tint} />
+        </View>
+        <View style={{ flex: 1, gap: 2 }}>
+          <ThemedText type="label" themeColor="tintText">
+            PRICE WATCH · {priceMonth('long').toUpperCase()}
+          </ThemedText>
+          <ThemedText type="smallBold">{capitalize(item)} costs more this month</ThemedText>
+          <ThemedText type="caption" themeColor="textSecondary">
+            {reason}
+          </ThemedText>
+        </View>
+        <Ionicons name="chevron-forward" size={16} color={theme.textSecondary} />
+      </Card>
+    </Pressable>
   );
 }
 
@@ -387,7 +479,7 @@ function EmptyPantryCard({ onSample }: { onSample: () => void }) {
       <View style={{ flex: 1, gap: 2 }}>
         <ThemedText type="smallBold">Your pantry is empty</ThemedText>
         <ThemedText type="caption" themeColor="textSecondary">
-          Scan raw meat, fish, fruits or veggies to start tracking.
+          Scan raw beef, pork, chicken or fish to start tracking.
         </ThemedText>
       </View>
       <View style={styles.emptyActions}>
@@ -404,7 +496,9 @@ const styles = StyleSheet.create({
   profileButton: { width: 40, height: 40, borderRadius: 20, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   setupCard: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: Spacing.three - 4 },
   setupActions: { flexDirection: 'row', gap: Spacing.two, width: '100%' },
-  summary: { padding: Spacing.four - 4, gap: Spacing.two },
+  summary: { borderRadius: 20, padding: Spacing.four - 4, gap: Spacing.two, overflow: 'hidden' },
+  bubbleTop: { position: 'absolute', width: 170, height: 170, borderRadius: 85, top: -50, right: -40 },
+  bubbleBottom: { position: 'absolute', width: 90, height: 90, borderRadius: 45, bottom: -30, right: 10 },
   counts: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two, marginTop: Spacing.one },
   countChip: {
     flexDirection: 'row',
@@ -416,8 +510,10 @@ const styles = StyleSheet.create({
   },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   link: { flexDirection: 'row', alignItems: 'center', gap: 2 },
-  cards: { gap: Spacing.three },
-  useCard: { width: 150, padding: Spacing.two, gap: Spacing.one },
+  cardsBleed: { marginHorizontal: -SCREEN_PAD },
+  cards: { gap: CARD_GAP, paddingHorizontal: SCREEN_PAD },
+  useCard: { padding: Spacing.two, gap: Spacing.one },
+  cookButton: { marginTop: Spacing.one, borderRadius: 999, paddingVertical: Spacing.two, alignItems: 'center' },
   thumb: {
     height: 100,
     borderRadius: 12,

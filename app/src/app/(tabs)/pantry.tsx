@@ -14,7 +14,8 @@ import { Spacing } from '@/constants/theme';
 import { urgencyGroup } from '@/domain/cook-by';
 import { pantryValue, peso } from '@/domain/prices';
 import { STORAGE_LABEL, type Storage, type Urgency } from '@/domain/types';
-import { usePantry } from '@/hooks/use-pantry';
+import { openListCount } from '@/db/shopping';
+import { useFocusQuery, usePantry } from '@/hooks/use-pantry';
 import { useTheme } from '@/hooks/use-theme';
 import { openScanner } from '@/lib/open-scanner';
 
@@ -24,6 +25,7 @@ const GROUPS: Urgency[] = ['Use today', 'Use soon', 'Fresh', 'Check now'];
 export default function PantryScreen() {
   const items = usePantry();
   const theme = useTheme();
+  const [listCount] = useFocusQuery(openListCount, 0);
   const [filter, setFilter] = useState<'all' | Storage>('all');
   const total = items.reduce((sum, i) => sum + pantryValue(i), 0);
   const shown = filter === 'all' ? items : items.filter((i) => i.storage === filter);
@@ -31,12 +33,29 @@ export default function PantryScreen() {
 
   return (
     <Screen>
-      <View style={{ gap: 2 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.three }}>
+      <View style={{ gap: 2, flex: 1 }}>
         <ThemedText type="title">Pantry</ThemedText>
         <ThemedText type="small" themeColor="textSecondary">
           {items.length} item{items.length === 1 ? '' : 's'}
           {total > 0 ? ` · ${peso(total)} worth of food` : ''}
         </ThemedText>
+      </View>
+        {/* N04 Shopping list (UC-9.1) */}
+        <Pressable
+          onPress={() => router.push('/shopping')}
+          accessibilityLabel={`Shopping list, ${listCount} items`}
+          hitSlop={8}
+          style={{ width: 40, height: 40, borderRadius: 20, borderWidth: 1, borderColor: theme.backgroundSelected, backgroundColor: theme.backgroundElement, alignItems: 'center', justifyContent: 'center' }}>
+          <Ionicons name="list" size={18} color={theme.text} />
+          {listCount > 0 && (
+            <View style={{ position: 'absolute', top: -4, right: -4, minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 4, backgroundColor: theme.tint, alignItems: 'center', justifyContent: 'center' }}>
+              <ThemedText type="caption" style={{ color: '#fff', fontSize: 10, lineHeight: 12 }}>
+                {listCount}
+              </ThemedText>
+            </View>
+          )}
+        </Pressable>
       </View>
 
       {items.length === 0 ? (

@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { StagePill } from '@/components/badges';
+import { Pill, StagePill } from '@/components/badges';
 import { Button } from '@/components/button';
 import { Card } from '@/components/card';
 import { Note } from '@/components/chat';
@@ -15,7 +15,7 @@ import { BoughtSheet, PalengkeHeader, PriceBar, VerdictCard, verdictColor } from
 import { ThemedText } from '@/components/themed-text';
 import { Fonts, Spacing } from '@/constants/theme';
 import { PRICE_SOURCE } from '@/domain/prices';
-import { addCheck, buyFromCheck, listTripChecks, renameStall, type PalengkeCheck } from '@/db/palengke';
+import { addCheck, buyFromCheck, listTripChecks, nameStall, type PalengkeCheck } from '@/db/palengke';
 import {
   judge,
   REFERENCE_DATE,
@@ -30,7 +30,12 @@ import type { Stage } from '@/domain/types';
 import { useTheme } from '@/hooks/use-theme';
 import { pickPhoto } from '@/lib/open-scanner';
 import { FISH_SPECIES, isGenericFish } from '@/domain/fish';
-import { classify, CONFIDENCE_THRESHOLD, DEMO_MODE, describeGuess, type Guess } from '@/ml/classifier';
+import { Chips } from '@/components/chips';
+import { analyzePhoto, DEMO_MODE, shortError, type Analysis } from '@/ml/classifier';
+import { gateMessage } from '@/ml/gate';
+import { itemChoices, MSG, RETAKE_TIPS } from '@/ml/messages';
+import { QUALITY_MESSAGE, type QualityIssue } from '@/ml/quality';
+import { freshnessFor, type Item, type ItemRead, type Verdict as ItemVerdict } from '@/ml/read';
 
 const UNITS: { value: VendorUnit; label: string }[] = (Object.keys(VENDOR_UNIT_LABEL) as VendorUnit[]).map((value) => ({
   value,
@@ -39,9 +44,15 @@ const UNITS: { value: VendorUnit; label: string }[] = (Object.keys(VENDOR_UNIT_L
 
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-type Phase = 'identifying' | 'pickItem' | 'species' | 'price' | 'verdict';
+type Phase = 'identifying' | 'pickItem' | 'retake' | 'spoiled' | 'species' | 'price' | 'verdict';
 
-/** Palengke check: identify (M02), cut (M03), price, verdict (M04–M08), bought (M09), compare? (M10). */
+const QUALITY_SHORT: Record<QualityIssue, string> = { too_dark: 'Too dark', too_bright: 'Too bright', blurry: 'Too blurry' };
+
+/**
+ * Palengke check: identify (M02), cut or fish (M03, M03b), price, verdict (M04–M08), bought (M09),
+ * compare? (M10). Spoiled stops before the price (M13), unclear freshness asks for a close-up
+ * (M14), and a photo that can't be checked asks for a retake (M15).
+ */
 export default function PalengkeCheckScreen() {
   const { photo } = useLocalSearchParams<{ photo: string }>();
   return <Check key={photo} photo={photo} />;
@@ -52,7 +63,8 @@ function Check({ photo }: { photo: string }) {
   const theme = useTheme();
   const started = useRef(false);
   const [phase, setPhase] = useState<Phase>('identifying');
-  const [guesses, setGuesses] = useState<Guess[]>([]);
+  /** The model's reading, kept until the user confirms the item (never shown as percentages). */
+  const [reading, setReading] = useState<{ items: ItemRead[]; verdict: ItemVerdict } | null>(null);
   const [item, setItem] = useState('');
   const [stage, setStage] = useState<Stage>('good');
   const [note, setNote] = useState<string | null>(null);
@@ -67,36 +79,62 @@ function Check({ photo }: { photo: string }) {
   const [comparing, setComparing] = useState(false);
   const [bought, setBought] = useState<{ pantryId: string; daysLeft: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** M15: photo stopped by validation (quality, face, not meat or fish). Always a retake; nothing is saved. */
+  const [invalid, setInvalid] = useState<{ text: string; short: string } | null>(null);
+
+  function handleAnalysis(a: Analysis) {
+    if (a.kind === 'quality') return setInvalid({ text: QUALITY_MESSAGE[a.issue].text, short: QUALITY_SHORT[a.issue] });
+    if (a.kind === 'face') return setInvalid({ text: MSG.face, short: 'Has a face in it' });
+    if (a.kind === 'not_food') return setInvalid({ text: gateMessage(a.reject), short: 'Not raw meat or fish' });
+    if (!a.verdict.confident) return setInvalid({ text: MSG.unsure, short: "Can't tell what it is" });
+    setInvalid(null);
+    // The user always confirms the item (the model can mix up beef and pork).
+    setReading({ items: a.items, verdict: a.verdict });
+    setPhase('pickItem');
+  }
+
+  function failed(e: Error) {
+    console.warn('Palengke check failed', e);
+    setError(shortError(e));
+  }
 
   useEffect(() => {
     if (started.current) return;
     started.current = true;
-    classify(photo).then(
-      (top) => {
-        setGuesses(top);
-        if (top[0] && top[0].confidence >= CONFIDENCE_THRESHOLD) choose(top[0]);
-        else setPhase('pickItem');
-      },
-      (e: Error) => setError(e.message),
-    );
+    analyzePhoto(photo).then(handleAnalysis, failed);
   }, [photo]);
 
-  function choose(g: Guess) {
-    const name = g.item;
+  /** The user confirmed or named the item. Freshness comes from the photo only when it's clear. */
+  function pickItem(choice: Item | 'none') {
+    if (choice === 'none') return setInvalid({ text: MSG.notIt, short: 'Not the item I guessed' });
+    if (!reading) return;
+    const fresh = freshnessFor(reading.items, choice, reading.verdict);
+    if (fresh === 'unclear') {
+      // M14 (UC-1.11): can't read freshness from this photo, so retake a close-up; never guess.
+      setItem(choice);
+      return setPhase('retake');
+    }
+    choose(choice, fresh, MSG.disclaimer);
+  }
+
+  function choose(name: string, s: Stage, why: string) {
     setItem(name);
-    // Non-fresh fish (eye/gill) isn't a spoilage verdict (see assets/model/README.md), so judge it
-    // cautiously as "use soon": never a "good buy", and the note asks for a smell and texture check.
-    const nonFreshFish = g.item === 'fish' && g.finding === 'non-fresh';
-    setStage(nonFreshFish ? 'use_soon' : (g.stage ?? 'good'));
-    setNote(
-      nonFreshFish
-        ? `Model: ${describeGuess(g)}. Not a spoilage check: smell it and press the flesh before buying.`
-        : `Model: ${describeGuess(g)} · ${Math.round(g.confidence * 100)}%`,
-    );
-    // The model can't tell fish species apart; the reference price needs it.
+    setStage(s);
+    setNote(why);
+    // M13: spoiled is "Don't buy" whatever the price, so the price isn't asked.
+    if (s === 'spoiled') return setPhase('spoiled');
+    // M03b: the model can't tell fish species apart; the reference price needs it.
     if (isGenericFish(name)) return setPhase('species');
     setPhase('price');
     if (variantsOf(name)) setAskCut(true); // UC-6.4
+  }
+
+  /** M02 "Not bangus? Change": pick the item again. */
+  function changeItem() {
+    setItem('');
+    setCut(null);
+    setPriceText('');
+    setPhase('pickItem');
   }
 
   async function checkPrice() {
@@ -107,7 +145,7 @@ function Check({ photo }: { photo: string }) {
     const stall = `Stall ${trip.length + 1}`;
     const id = await addCheck(db, { item, cut, stage, price, unit, verdict: v.kind, stall, photo_uri: photo });
     setVerdict(v);
-    setCheck({ id, created_at: Date.now(), item, cut, stage, price, unit, verdict: v.kind, stall, photo_uri: photo, bought: 0 });
+    setCheck({ id, created_at: Date.now(), item, cut, stage, price, unit, verdict: v.kind, stall, stall_name: null, photo_uri: photo, bought: 0 });
     setPhase('verdict');
     // M10: same item earlier on this trip, in the same unit → offer to compare (UC-6.7).
     const comparable = trip.filter((t) => t.unit === unit && !t.bought);
@@ -123,6 +161,12 @@ function Check({ photo }: { photo: string }) {
     setBought(await buyFromCheck(db, check));
   }
 
+  /** Retake with the camera (M14, M15). */
+  async function retake() {
+    const next = await pickPhoto('camera');
+    if (next) router.replace({ pathname: '/market/check', params: { photo: next } });
+  }
+
   async function scanAnother() {
     const next = await pickPhoto();
     if (next) router.replace({ pathname: '/market/check', params: { photo: next } });
@@ -131,7 +175,7 @@ function Check({ photo }: { photo: string }) {
   async function compare() {
     if (!check) return;
     const name = stallName.trim();
-    if (name && name !== check.stall) await renameStall(db, check.id, name);
+    if (name && name !== check.stall) await nameStall(db, check.id, name);
     setComparing(false);
     router.replace({ pathname: '/market/compare', params: { item, cut: cut ?? '' } });
   }
@@ -147,8 +191,19 @@ function Check({ photo }: { photo: string }) {
         {DEMO_MODE && <Note icon="flask-outline" tone="amber">{"Demo mode: Expo Go can't run the on-device model, so results are sample guesses."}</Note>}
 
         {phase === 'verdict' && verdict && <VerdictCard kind={verdict.kind} title={verdict.title} body={verdict.body} />}
+        {phase === 'spoiled' && (
+          <VerdictCard kind="dont_buy" title="Don't buy this" body="It looks spoiled, so there's no need to check the price." />
+        )}
+        {phase === 'retake' && (
+          <VerdictCard
+            kind="retake"
+            title={item === 'fish' ? 'Get closer to the eye and gills' : 'Get closer to the cut surface'}
+            body={`I'm sure it's ${item === 'fish' ? 'a fish' : item}, but I can't read its freshness from this photo.`}
+          />
+        )}
+        {invalid && <VerdictCard kind="cant_check" title="Retake the photo" body={invalid.text} />}
 
-        {phase === 'identifying' && !error && (
+        {phase === 'identifying' && !error && !invalid && (
           <Card style={styles.centerRow}>
             <ActivityIndicator color={theme.tint} />
             <ThemedText type="small">Checking freshness on your phone…</ThemedText>
@@ -156,23 +211,35 @@ function Check({ photo }: { photo: string }) {
         )}
         {error && <Note icon="warning-outline" tone="danger">{`Couldn't check that photo. (${error})`}</Note>}
 
-        {phase === 'pickItem' && (
-          <Card style={{ gap: 0, paddingVertical: Spacing.one }}>
-            <ThemedText type="small" style={{ paddingVertical: Spacing.two }}>
-              Which item is this?
-            </ThemedText>
-            {guesses.map((g) => (
-              <Pressable key={g.label} onPress={() => choose(g)} style={styles.radioRow}>
-                <Ionicons name="radio-button-off" size={18} color={theme.textSecondary} />
-                <ThemedText type="smallBold">
-                  {describeGuess(g)} · {Math.round(g.confidence * 100)}%
+        {/* M15 */}
+        {invalid && (
+          <>
+            <Card style={styles.itemRow}>
+              <View style={[styles.thumb, { backgroundColor: theme.highlight }]}>
+                <Image source={{ uri: photo }} style={StyleSheet.absoluteFill} contentFit="cover" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <ThemedText type="smallBold">Photo</ThemedText>
+                <ThemedText type="caption" themeColor="textSecondary">
+                  {invalid.short}
                 </ThemedText>
-              </Pressable>
-            ))}
+              </View>
+              <Pill label="Can't check" tone={{ fg: 'textSecondary', bg: 'backgroundSelected' }} />
+            </Card>
+            <Note icon="information-circle-outline" tone="neutral">
+              A face or a non-food photo gets the same retake reply. Nothing is saved.
+            </Note>
+          </>
+        )}
+
+        {phase === 'pickItem' && reading && !invalid && (
+          <Card style={{ gap: Spacing.two }}>
+            <ThemedText type="small">{MSG.looksLike(reading.verdict.best.item)}</ThemedText>
+            <Chips options={itemChoices(reading.verdict.best.item)} onPick={pickItem} />
           </Card>
         )}
 
-        {item !== '' && (
+        {item !== '' && !invalid && (
           <Card style={styles.itemRow}>
             <View style={[styles.thumb, { backgroundColor: theme.highlight }]}>
               <Image source={{ uri: photo }} style={StyleSheet.absoluteFill} contentFit="cover" />
@@ -180,25 +247,40 @@ function Check({ photo }: { photo: string }) {
             <View style={{ flex: 1 }}>
               <ThemedText type="smallBold">{displayName}</ThemedText>
               <ThemedText type="caption" themeColor="textSecondary">
-                {[phase === 'verdict' && check ? `1 ${unitShort(unit)}` : null, note ?? 'Identified on-device'].filter(Boolean).join(' · ')}
+                {phase === 'retake'
+                  ? 'Freshness unclear'
+                  : [phase === 'verdict' && check ? `1 ${unitShort(unit)}` : null, note ?? 'Identified on-device'].filter(Boolean).join(' · ')}
               </ThemedText>
+              {phase === 'price' && (
+                <Pressable onPress={changeItem} hitSlop={6}>
+                  <ThemedText type="caption" themeColor="danger">
+                    {`Not ${displayName.toLowerCase()}? Change`}
+                  </ThemedText>
+                </Pressable>
+              )}
             </View>
-            <StagePill stage={stage} />
+            {phase === 'retake' ? <Pill label="Can't tell" tone={{ fg: 'textSecondary', bg: 'backgroundSelected' }} /> : <StagePill stage={stage} />}
           </Card>
         )}
 
-        {phase === 'species' && (
-          <View style={{ gap: Spacing.two }}>
-            <ThemedText type="label">Which fish is it?</ThemedText>
-            <ChoicePills
-              options={FISH_SPECIES}
-              value={null}
-              onChange={(species) => {
-                setItem(species);
-                setPhase('price');
-              }}
-            />
-          </View>
+        {/* M14: how to retake */}
+        {phase === 'retake' && (
+          <Card style={{ gap: Spacing.two }}>
+            <ThemedText type="smallBold">For a clear check</ThemedText>
+            {RETAKE_TIPS[item === 'fish' ? 'fish' : 'meat'].map((t) => (
+              <View key={t.text} style={styles.centerRow}>
+                <Ionicons name={t.icon} size={14} color={theme.tint} />
+                <ThemedText type="caption">{t.text}</ThemedText>
+              </View>
+            ))}
+          </Card>
+        )}
+
+        {/* M13 */}
+        {phase === 'spoiled' && (
+          <Note icon="information-circle-outline" tone="neutral">
+            Freshness is a visual estimate, not a food-safety check. When in doubt, skip it.
+          </Note>
         )}
 
         {phase === 'price' && (
@@ -281,6 +363,16 @@ function Check({ photo }: { photo: string }) {
       </ScrollView>
 
       <View style={styles.footer}>
+        {(invalid || phase === 'retake' || phase === 'spoiled') && (
+          <>
+            <Button
+              title={invalid ? 'Retake photo' : phase === 'retake' ? 'Retake close-up' : 'Scan another'}
+              icon="scan"
+              onPress={phase === 'retake' || invalid ? () => retake() : scanAnother}
+            />
+            <Button title="Done" variant="secondary" onPress={() => router.back()} />
+          </>
+        )}
         {phase === 'price' && <Button title="Check price" onPress={checkPrice} disabled={!Number(priceText.replace(/[^\d.]/g, ''))} />}
         {phase === 'verdict' && verdict && (
           <>
@@ -318,6 +410,22 @@ function Check({ photo }: { photo: string }) {
         />
       </Sheet>
 
+      {/* M03b: which fish (UC-6.4) */}
+      <Sheet visible={phase === 'species'} onClose={() => router.back()}>
+        <OptionPicker
+          title="Which fish is it?"
+          sub="I'm sure it's a fish. Each kind has its own price range."
+          options={[
+            ...FISH_SPECIES.filter((f) => !isGenericFish(f.value)).map((f) => ({ id: f.value as string | null, label: f.label, sub: f.sub ?? '', range: rangeText(f.value) })),
+            { id: null, label: 'Not sure', sub: 'Use the general fish range', range: rangeText('fish') },
+          ]}
+          onPick={(species) => {
+            setItem(species ?? 'fish');
+            setPhase('price');
+          }}
+        />
+      </Sheet>
+
       {/* M10: compare with your earlier check? (UC-6.7) */}
       <Sheet visible={comparing} onClose={() => setComparing(false)}>
         <View style={styles.compareTitle}>
@@ -332,9 +440,9 @@ function Check({ photo }: { photo: string }) {
           </View>
         </View>
         {earlier.map((e) => (
-          <StallRow key={e.id} name={e.stall} detail={`${new Date(e.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })} · ₱${e.price}/${unitShort(e.unit)}`} stage={e.stage} />
+          <StallRow key={e.id} name={`${e.stall_name ?? e.stall} · ${capitalize(e.item)}`} detail={`${new Date(e.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })} · ₱${e.price}/${unitShort(e.unit)}`} stage={e.stage} />
         ))}
-        {check && <StallRow name="This stall" detail={`Just now · ₱${check.price}/${unitShort(check.unit)}`} stage={check.stage} highlight />}
+        {check && <StallRow name={`This stall · ${capitalize(check.item)}`} detail={`Just now · ₱${check.price}/${unitShort(check.unit)}`} stage={check.stage} highlight />}
         <View style={{ gap: Spacing.two }}>
           <ThemedText type="label">Name this stall (optional)</ThemedText>
           <TextInput
@@ -358,21 +466,38 @@ function Check({ photo }: { photo: string }) {
   );
 }
 
+function rangeText(item: string) {
+  const r = usualRange(item);
+  return r ? `₱${r.low}–₱${r.high}/${unitShort(r.unit)}` : '';
+}
+
 function CutPicker({ item, onPick }: { item: string; onPick: (cut: string | null) => void }) {
+  const variants = variantsOf(item) ?? [];
+  return (
+    <OptionPicker
+      title="Which cut is it?"
+      sub="Each cut has its own price range."
+      options={[
+        ...variants.map((v) => ({ id: v.id as string | null, label: v.label, sub: v.sub, range: `₱${v.low}–₱${v.high}/kg` })),
+        { id: null, label: 'Not sure', sub: `Use the general ${item} range`, range: rangeText(item) },
+      ]}
+      onPick={onPick}
+    />
+  );
+}
+
+type Option = { id: string | null; label: string; sub: string; range: string };
+
+/** Radio list with price ranges (M03, M03b). */
+function OptionPicker({ title, sub, options, onPick }: { title: string; sub: string; options: Option[]; onPick: (id: string | null) => void }) {
   const theme = useTheme();
   const [picked, setPicked] = useState<string | null | undefined>(undefined);
-  const variants = variantsOf(item) ?? [];
-  const general = usualRange(item);
-  const options = [
-    ...variants.map((v) => ({ id: v.id as string | null, label: v.label, sub: v.sub, range: `₱${v.low}–₱${v.high}/kg` })),
-    { id: null, label: 'Not sure', sub: `Use the general ${item} range`, range: general ? `₱${general.low}–₱${general.high}/kg` : '' },
-  ];
   return (
     <>
       <View>
-        <ThemedText type="section">Which cut is it?</ThemedText>
+        <ThemedText type="section">{title}</ThemedText>
         <ThemedText type="caption" themeColor="textSecondary">
-          Each cut has its own price range.
+          {sub}
         </ThemedText>
       </View>
       {options.map((o) => {

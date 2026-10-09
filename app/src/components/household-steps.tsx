@@ -9,7 +9,7 @@ import { ThemedText } from '@/components/themed-text';
 import { Fonts, Spacing } from '@/constants/theme';
 import { ALLERGY_INFO, DIET_INFO, type Allergy, type Diet } from '@/db/profile';
 import { peso } from '@/domain/prices';
-import { ingredientsFor, understands } from '@/domain/custom-terms';
+import { ingredientsFor } from '@/domain/custom-terms';
 import { getRecipe, INGREDIENT_KEYS, viewRecipe } from '@/domain/recipes';
 import { useTheme } from '@/hooks/use-theme';
 
@@ -80,9 +80,15 @@ export function StepTitle({ title, body }: { title: string; body: string }) {
   );
 }
 
+/** Ingredients a typed entry hides that the dishes actually use. */
+function hiddenBy(term: string) {
+  const used = new Set(INGREDIENT_KEYS);
+  return [...ingredientsFor(term, INGREDIENT_KEYS)].filter((k) => used.has(k));
+}
+
 /**
- * Free-text entries, comma-separated, saved on the phone. Shows what each one
- * will hide, or that the app can't filter by it (it's still saved and shown).
+ * Typed-in diets or allergies: type one, tap Add, and it becomes a pill (✕ removes it).
+ * Says which dish ingredients they hide, or that no dish uses them.
  */
 export function OtherInput({
   value,
@@ -94,37 +100,73 @@ export function OtherInput({
   placeholder: string;
 }) {
   const theme = useTheme();
-  const [text, setText] = useState(value.join(', '));
-  const terms = text.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
-  const hidden = [...new Set(terms.flatMap((t) => [...ingredientsFor(t, INGREDIENT_KEYS)]))];
-  const unknown = terms.filter((t) => !understands(t, INGREDIENT_KEYS));
+  const [text, setText] = useState('');
+  const hidden = [...new Set(value.flatMap(hiddenBy))];
+  const unused = value.filter((t) => hiddenBy(t).length === 0);
+
+  function add() {
+    // Commas still work for several at once.
+    const terms = text.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
+    const next = [...value, ...terms.filter((t) => !value.includes(t))];
+    if (next.length !== value.length) onChange(next);
+    setText('');
+  }
+
   return (
-    <View style={{ gap: Spacing.one + 2 }}>
-      <TextInput
-        autoFocus={value.length === 0}
-        value={text}
-        onChangeText={(t) => {
-          setText(t);
-          onChange(t.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean));
-        }}
-        placeholder={placeholder}
-        placeholderTextColor={theme.textSecondary}
-        style={[styles.input, { borderColor: theme.tint, color: theme.text, backgroundColor: theme.backgroundElement }]}
-      />
+    <View style={{ gap: Spacing.two }}>
+      {value.length > 0 && (
+        <View style={styles.pills}>
+          {value.map((t) => (
+            <Pressable
+              key={t}
+              onPress={() => onChange(value.filter((x) => x !== t))}
+              accessibilityRole="button"
+              accessibilityLabel={`Remove ${t}`}
+              style={[styles.pill, { borderColor: theme.tint, backgroundColor: theme.highlight }]}>
+              <ThemedText type="label" themeColor="tintText">
+                {t}
+              </ThemedText>
+              <Ionicons name="close" size={14} color={theme.tintText} />
+            </Pressable>
+          ))}
+        </View>
+      )}
+      <View style={styles.addRow}>
+        <TextInput
+          autoFocus={value.length === 0}
+          value={text}
+          onChangeText={setText}
+          onSubmitEditing={add}
+          // Leaving the field keeps what was typed, even without tapping Add.
+          onBlur={add}
+          returnKeyType="done"
+          placeholder={placeholder}
+          placeholderTextColor={theme.textSecondary}
+          style={[styles.input, { flex: 1, borderColor: theme.tint, color: theme.text, backgroundColor: theme.backgroundElement }]}
+        />
+        <Pressable
+          onPress={add}
+          disabled={!text.trim()}
+          accessibilityRole="button"
+          accessibilityLabel="Add"
+          style={[styles.addButton, { backgroundColor: theme.tint, opacity: text.trim() ? 1 : 0.4 }]}>
+          <Ionicons name="add" size={18} color="#fff" />
+          <ThemedText type="label" style={{ color: '#fff' }}>
+            Add
+          </ThemedText>
+        </Pressable>
+      </View>
       {hidden.length > 0 && (
         <ThemedText type="caption" themeColor="fresh">
           I&apos;ll hide dishes with {hidden.slice(0, 6).join(', ')}
           {hidden.length > 6 ? ' and more' : ''}.
         </ThemedText>
       )}
-      {unknown.length > 0 && (
+      {unused.length > 0 && (
         <ThemedText type="caption" themeColor="textSecondary">
-          Saved, but I can&apos;t filter dishes by “{unknown.join('”, “')}” yet.
+          None of my dishes use {unused.join(', ')}, so nothing is hidden. It&apos;s still saved to your profile.
         </ThemedText>
       )}
-      <ThemedText type="caption" themeColor="textSecondary">
-        Separate with commas. Saved on this phone, works offline.
-      </ThemedText>
     </View>
   );
 }
@@ -293,6 +335,10 @@ const styles = StyleSheet.create({
   rowIcon: { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   box: { width: 22, height: 22, borderRadius: 6, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
   input: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, fontFamily: Fonts.medium, fontSize: 14 },
+  pills: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two },
+  pill: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8 },
+  addRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  addButton: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12 },
   sizeCard: { alignItems: 'center', gap: Spacing.three, paddingVertical: Spacing.four },
   people: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one + 2 },
   person: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },

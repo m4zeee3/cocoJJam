@@ -6,7 +6,7 @@ import { Pressable, StyleSheet, View, type ColorValue } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { Fonts } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import { openScanner } from '@/lib/open-scanner';
+import { isScanChatOpen, openScanner } from '@/lib/open-scanner';
 
 function ion(name: keyof typeof Ionicons.glyphMap) {
   return function TabBarIcon({ color }: { color: ColorValue }) {
@@ -41,10 +41,11 @@ export default function TabsLayout() {
         name="scan"
         options={{
           title: 'Scan',
-          // Asks camera or gallery first; the chat shows once a photo is picked.
-          tabBarButton: ({ accessibilityState }) => (
+          // First time: ask camera or gallery, then show the chat. Once the chat has been
+          // opened, the tab goes back to it as it was (the default tab press keeps its photos).
+          tabBarButton: ({ accessibilityState, onPress }) => (
             <Pressable
-              onPress={() => openScanner()}
+              onPress={(e) => (isScanChatOpen() ? onPress?.(e) : openScanner())}
               accessibilityRole="button"
               accessibilityLabel="Scan"
               accessibilityState={accessibilityState}

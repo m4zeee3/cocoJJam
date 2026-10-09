@@ -3,7 +3,7 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 
 import { addPantryItem } from '@/db/pantry';
 import { estimateCookBy, toIsoDate } from '@/domain/cook-by';
-import { priceFor, proteinOf } from '@/domain/prices';
+import { NOTABLE_CHANGE, priceFor, priceInfo, proteinOf } from '@/domain/prices';
 import type { Line } from '@/domain/recipes';
 import type { Storage } from '@/domain/types';
 
@@ -68,25 +68,97 @@ export async function removeFromList(db: SQLiteDatabase, id: string) {
   await db.runAsync(`UPDATE shopping_items SET deleted = 1 WHERE id = ?`, id);
 }
 
-/**
- * N05 swap: replace a pricier meat with chicken for the same weight (UC-9.1, 4.3).
- * Returns null when there's nothing to gain.
- */
-export function proteinSwap(i: ShoppingItem) {
+/** N04 sections: what kind of item each row is. The pantry only takes meat and fish. */
+export type ListGroup = 'Meat & fish' | 'Gulay' | 'Others';
+export const LIST_GROUPS: ListGroup[] = ['Meat & fish', 'Gulay', 'Others'];
+
+const GULAY = new Set(['kangkong', 'tomato', 'radish', 'sitaw', 'malunggay', 'papaya', 'siling haba']);
+
+export function listGroup(item: string): ListGroup {
+  if (proteinOf(item)) return 'Meat & fish';
+  return GULAY.has(item) ? 'Gulay' : 'Others';
+}
+
+/** A way to bring the list under budget (N05). */
+export type Swap = {
+  id: string;
+  title: string;
+  why: string;
+  saves: number;
+  apply: (db: SQLiteDatabase) => Promise<void>;
+};
+
+/** Sinigang vegetables that can stand in for each other. */
+const SOUP_GULAY = ['radish', 'sitaw', 'kangkong'];
+
+/** Least saving worth suggesting. */
+const MIN_SAVING = 10;
+
+/** Pork or beef → chicken for the same weight (UC-9.1, 4.3). */
+function proteinSwap(i: ShoppingItem): Swap | null {
   const kind = proteinOf(i.item);
   if ((kind !== 'pork' && kind !== 'beef') || i.price == null) return null;
   const kg = i.unit === 'g' ? i.qty / 1000 : i.unit === 'kg' ? i.qty : null;
   if (kg == null) return null;
   const chicken = priceFor('chicken', kg);
-  if (chicken == null || i.price - chicken < 20) return null;
-  return { to: 'chicken', saves: i.price - chicken, price: chicken };
+  if (chicken == null || i.price - chicken < 2 * MIN_SAVING) return null;
+  const change = priceInfo(kind)?.change ?? 0;
+  const name = kind === 'pork' ? 'Pork' : 'Beef';
+  return {
+    id: i.id,
+    title: `Swap ${i.name.toLowerCase()} for chicken`,
+    why: change >= NOTABLE_CHANGE
+      ? `${name} is ${changeLabel(change).slice(1)} above usual this month`
+      : `${i.recipe_title ?? 'Same dish'} · same weight`,
+    saves: i.price - chicken,
+    apply: async (db) => {
+      await db.runAsync(
+        `UPDATE shopping_items SET item = 'chicken', name = 'Chicken', amount = ?, price = ? WHERE id = ?`,
+        i.amount.replace(/,.*$/, '') + ', cut up', chicken, i.id,
+      );
+    },
+  };
 }
 
-export async function applySwap(db: SQLiteDatabase, i: ShoppingItem, price: number) {
-  await db.runAsync(
-    `UPDATE shopping_items SET item = 'chicken', name = 'Chicken', amount = ?, price = ? WHERE id = ?`,
-    i.amount.replace(/,.*$/, '') + ', cut up', price, i.id,
-  );
+/** Skip one sinigang vegetable and buy half again of another from the same recipe. */
+function gulaySwap(skip: ShoppingItem, more: ShoppingItem): Swap | null {
+  if (skip.price == null || more.price == null) return null;
+  const extra = more.price / 2;
+  const saves = skip.price - extra;
+  if (saves < MIN_SAVING) return null;
+  const qty = more.qty * 1.5;
+  const prep = more.amount.includes(',') ? more.amount.slice(more.amount.indexOf(',')) : '';
+  const dish = skip.recipe_title?.replace(/ na .*/, '').toLowerCase() ?? 'dish';
+  return {
+    id: skip.id,
+    title: `Skip ${skip.name.replace(/ \(.*\)/, '').toLowerCase()}, add more ${more.name.toLowerCase()}`,
+    why: `Same ${dish}, a little different`,
+    saves,
+    apply: async (db) => {
+      await db.withTransactionAsync(async () => {
+        await db.runAsync(`UPDATE shopping_items SET deleted = 1 WHERE id = ?`, skip.id);
+        await db.runAsync(
+          `UPDATE shopping_items SET qty = ?, amount = ?, price = ? WHERE id = ?`,
+          qty, formatAmount(qty, more.unit) + prep, more.price! + extra, more.id,
+        );
+      });
+    },
+  };
+}
+
+/** N05: swaps for the unchecked items, biggest saving first. One vegetable swap per recipe. */
+export function budgetSwaps(open: ShoppingItem[]): Swap[] {
+  const swaps = open.map(proteinSwap).filter((s): s is Swap => s != null);
+  const recipes = new Set(open.map((i) => i.recipe_id));
+  for (const r of recipes) {
+    const soup = open.filter((i) => i.recipe_id === r && SOUP_GULAY.includes(i.item) && i.price != null);
+    const best = soup
+      .flatMap((skip) => soup.filter((m) => m !== skip).map((more) => gulaySwap(skip, more)))
+      .filter((s): s is Swap => s != null)
+      .sort((a, b) => b.saves - a.saves)[0];
+    if (best) swaps.push(best);
+  }
+  return swaps.sort((a, b) => b.saves - a.saves);
 }
 
 /**

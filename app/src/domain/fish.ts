@@ -3,10 +3,10 @@
  * depend on it, so the app asks. "fish" (Other fish) uses the generic rules
  * and has no reference price.
  */
-export const FISH_SPECIES: { value: string; label: string }[] = [
-  { value: 'bangus', label: 'Bangus' },
-  { value: 'tilapia', label: 'Tilapia' },
-  { value: 'galunggong', label: 'Galunggong' },
+export const FISH_SPECIES: { value: string; label: string; sub?: string }[] = [
+  { value: 'bangus', label: 'Bangus', sub: 'Milkfish' },
+  { value: 'tilapia', label: 'Tilapia', sub: 'Freshwater' },
+  { value: 'galunggong', label: 'Galunggong', sub: 'Round scad' },
   { value: 'fish', label: 'Other fish' },
 ];
 

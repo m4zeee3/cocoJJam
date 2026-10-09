@@ -6,7 +6,7 @@ import { ThemedText } from '@/components/themed-text';
 import { BRAND } from '@/constants/brand';
 import { Fonts, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import { DEMO_MODE, loadModel } from '@/ml/classifier';
+import { DEMO_MODE, warmUpModels } from '@/ml/classifier';
 
 /** How long the splash stays up on every launch (longer only if the model is still loading). */
 const SPLASH_MS = 2000;
@@ -32,7 +32,7 @@ export function AppSplash() {
       Animated.timing(progress, { toValue: 0.85, duration: min, easing: Easing.out(Easing.quad), useNativeDriver: false }).start();
       const wait = new Promise((r) => setTimeout(r, min));
       // A model that fails to load is reported when scanning; don't block the app here.
-      const model = DEMO_MODE ? Promise.resolve() : loadModel().catch(() => {});
+      const model = DEMO_MODE ? Promise.resolve() : warmUpModels().catch(() => {});
       await Promise.all([wait, model]);
       if (cancelled) return;
       Animated.sequence([

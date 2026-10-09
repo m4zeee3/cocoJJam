@@ -105,7 +105,7 @@ export default function PastScanScreen() {
                 <View style={{ flex: 1 }}>
                   <ThemedText type="smallBold">{capitalize(i.name)}</ThemedText>
                   <ThemedText type="caption" themeColor={i.stage === 'spoiled' ? 'danger' : 'tintText'}>
-                    {i.stage === 'spoiled' ? "Don't cook or eat" : i.daysLeft != null ? `Cook within ${longCountdown(i.daysLeft).toLowerCase()}` : 'Scanned'}
+                    {i.stage === 'spoiled' ? "Don't cook or eat" : i.daysLeft != null && i.daysLeft < 0 ? 'Past the safe window' : i.daysLeft != null ? `Cook within ${longCountdown(i.daysLeft).toLowerCase()}` : 'Scanned'}
                   </ThemedText>
                 </View>
                 <StagePill stage={i.stage} />

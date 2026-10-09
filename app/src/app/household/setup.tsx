@@ -152,12 +152,6 @@ function AllSet({ profile }: { profile: Profile }) {
             </View>
           ))}
         </View>
-        <View style={styles.summary}>
-          <Ionicons name="information-circle-outline" size={12} color={theme.textSecondary} />
-          <ThemedText type="caption" themeColor="textSecondary">
-            Saved on this phone · syncs if you sign in
-          </ThemedText>
-        </View>
       </View>
       <View style={styles.footer}>
         <Button

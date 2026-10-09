@@ -70,7 +70,7 @@ const MIGRATIONS: string[] = [
     cut TEXT,
     stage TEXT NOT NULL,
     price REAL NOT NULL,
-    unit TEXT NOT NULL,           -- kg | pc | tali | bundle
+    unit TEXT NOT NULL,           -- kg | pc | tumpok | tray (older rows: tali | bundle)
     verdict TEXT NOT NULL,
     stall TEXT NOT NULL,
     photo_uri TEXT,
@@ -96,6 +96,14 @@ const MIGRATIONS: string[] = [
     moved_pantry_id TEXT,           -- set when moved to the pantry (its paid price counts there)
     deleted INTEGER NOT NULL DEFAULT 0
   );
+  `,
+  // 5: a stall keeps its number ("Stall 1") and gets an optional name ("Aling Nena") (M10, M11).
+  `
+  ALTER TABLE palengke_checks ADD COLUMN stall_name TEXT;
+  `,
+  // 6: why an item was finished, for the Savings item log (N02): the dish it went into, or why it was wasted.
+  `
+  ALTER TABLE pantry_items ADD COLUMN finish_note TEXT;
   `,
 ];
 

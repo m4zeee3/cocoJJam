@@ -9,8 +9,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Pill, StagePill, URGENCY_COLOR } from '@/components/badges';
 import { Button } from '@/components/button';
 import { Card } from '@/components/card';
+import { Chips } from '@/components/chips';
 import { Note } from '@/components/chat';
-import { Segmented, Sheet, Stepper, Toast } from '@/components/controls';
+import { ChoicePills, Segmented, Sheet, Stepper, Toast } from '@/components/controls';
 import { ThemedText } from '@/components/themed-text';
 import { ItemIcon } from '@/components/item-icon';
 import { Spacing, type ThemeColor } from '@/constants/theme';
@@ -24,11 +25,16 @@ import {
 } from '@/db/pantry';
 import { daysUntil, longCountdown, parseIsoDate, urgencyGroup } from '@/domain/cook-by';
 import { pantryValue, peso } from '@/domain/prices';
+import { dishesWith } from '@/domain/recipes';
 import { PURCHASE_LABEL, STAGE_LABEL, STORAGE_LABEL, UNIT_LABEL, type Stage, type Storage } from '@/domain/types';
 import { useFocusQuery } from '@/hooks/use-pantry';
 import { useTheme } from '@/hooks/use-theme';
 import { pickPhoto } from '@/lib/open-scanner';
-import { classify } from '@/ml/classifier';
+import { analyzePhoto, shortError, type Analysis } from '@/ml/classifier';
+import { gateMessage } from '@/ml/gate';
+import { MSG, OWN_CHECK } from '@/ml/messages';
+import { QUALITY_MESSAGE } from '@/ml/quality';
+import { freshnessFor, itemOf } from '@/ml/read';
 
 const STORAGES: { value: Storage; label: string }[] = [
   { value: 'ref', label: 'Ref' },
@@ -47,7 +53,7 @@ export default function ItemDetailScreen() {
   const [item, reload] = useFocusQuery<PantryItem | null | undefined>((d) => getPantryItem(d, id), undefined);
   const [toast, setToast] = useState<{ message: string; undo?: PantryPatch } | null>(null);
   const [finishing, setFinishing] = useState<'used' | 'wasted' | null>(null);
-  const [rescan, setRescan] = useState<{ photo: string; stage: Stage | null } | null>(null);
+  const [rescan, setRescan] = useState<{ photo: string; stage: Stage | null; ask?: string } | null>(null);
   const hideToast = useCallback(() => setToast(null), []);
 
   if (item === undefined) return <SafeAreaView style={[styles.safe, { backgroundColor: theme.background }]} />;
@@ -89,13 +95,49 @@ export default function ItemDetailScreen() {
     if (!photo) return;
     setRescan({ photo, stage: null });
     try {
-      const [top] = await classify(photo);
-      // The placeholder model has no stages; keep the current one then.
-      setRescan({ photo, stage: top?.stage ?? item!.stage });
+      await showRescan(photo, await analyzePhoto(photo));
     } catch (e) {
       setRescan(null);
-      Alert.alert('Could not check that photo', (e as Error).message);
+      Alert.alert('Could not check that photo', shortError(e));
     }
+  }
+
+  /** Validation first (quality, not meat or fish), with the option to continue anyway. */
+  async function showRescan(photo: string, a: Analysis) {
+    if (a.kind !== 'ok') {
+      setRescan(null);
+      const text =
+        a.kind === 'quality' ? QUALITY_MESSAGE[a.issue].text : a.kind === 'face' ? MSG.face : gateMessage(a.reject);
+      // Only a quality problem can be overridden; a photo that isn't meat or fish must be retaken.
+      const useAnyway = {
+        text: 'Use it anyway',
+        onPress: async () => {
+          setRescan({ photo, stage: null });
+          try {
+            await showRescan(photo, await analyzePhoto(photo, { skipQuality: true }));
+          } catch (e) {
+            setRescan(null);
+            Alert.alert('Could not check that photo', shortError(e));
+          }
+        },
+      };
+      Alert.alert('Check this photo', text, [
+        { text: 'Retake photo', onPress: startRescan },
+        ...(a.kind === 'quality' ? [useAnyway] : []),
+        { text: 'Cancel', style: 'cancel' as const },
+      ]);
+      return;
+    }
+    // Trust the photo only when the model clearly sees this same item and is clear about freshness;
+    // otherwise ask the user's own check (UC-1.4, P07).
+    const known = itemOf(item!.name);
+    const fresh = known ? freshnessFor(a.items, known, a.verdict) : 'unclear';
+    if (fresh === 'unclear') {
+      const sameItem = known && a.verdict.confident && a.verdict.best.item === known;
+      setRescan({ photo, stage: null, ask: sameItem ? MSG.unclearFreshness : "I can't tell for sure from this photo." });
+      return;
+    }
+    setRescan({ photo, stage: fresh });
   }
 
   async function saveRescan() {
@@ -234,6 +276,8 @@ export default function ItemDetailScreen() {
           <RescanResult
             item={item}
             stage={rescan.stage}
+            ask={rescan.ask}
+            onOwnCheck={(stage) => setRescan({ ...rescan, stage, ask: undefined })}
             onSave={saveRescan}
             onAgain={() => {
               // Close the sheet first: iOS can't show the camera over an open modal.
@@ -319,8 +363,30 @@ function InfoRow({
 }
 
 /** P07: before vs now after a rescan. */
-function RescanResult({ item, stage, onSave, onAgain }: { item: PantryItem; stage: Stage | null; onSave: () => void; onAgain: () => void }) {
+function RescanResult({
+  item,
+  stage,
+  ask,
+  onOwnCheck,
+  onSave,
+  onAgain,
+}: {
+  item: PantryItem;
+  stage: Stage | null;
+  ask?: string;
+  onOwnCheck: (stage: Stage) => void;
+  onSave: () => void;
+  onAgain: () => void;
+}) {
   const theme = useTheme();
+  if (!stage && ask) {
+    return (
+      <>
+        <ThemedText type="small">{`${ask} ${MSG.ownCheck}`}</ThemedText>
+        <Chips options={OWN_CHECK} onPick={onOwnCheck} />
+      </>
+    );
+  }
   if (!stage) {
     return (
       <View style={[styles.row, { justifyContent: 'center', paddingVertical: Spacing.four }]}>
@@ -396,6 +462,8 @@ function RescanResult({ item, stage, onSave, onAgain }: { item: PantryItem; stag
 }
 
 /** P08: what happened to it, and how much. */
+const WASTE_REASONS = ['slimy', 'smelled off', 'moldy', 'past estimate', 'forgot about it'];
+
 function FinishSheet({
   item,
   initial,
@@ -411,6 +479,9 @@ function FinishSheet({
   const theme = useTheme();
   const [status, setStatus] = useState(initial);
   const [qty, setQty] = useState(item.quantity);
+  /** Optional: the dish (used) or the reason (wasted), shown in the Savings item log (N02). */
+  const [note, setNote] = useState<string | null>(null);
+  const noteOptions = (status === 'used' ? dishesWith(item.name) : WASTE_REASONS).map((n) => ({ value: n, label: n }));
   const step = item.unit === 'g' ? 50 : item.unit === 'kg' ? 0.25 : 1;
   const value = pantryValue({ ...item, quantity: qty });
   const unit = UNIT_LABEL[item.unit] ?? item.unit;
@@ -428,7 +499,10 @@ function FinishSheet({
         return (
           <Pressable
             key={o.value}
-            onPress={() => setStatus(o.value)}
+            onPress={() => {
+              setStatus(o.value);
+              setNote(null);
+            }}
             accessibilityRole="radio"
             accessibilityState={{ selected }}
             style={[
@@ -457,6 +531,12 @@ function FinishSheet({
           </ThemedText>
         </View>
       </View>
+      {noteOptions.length > 0 && (
+        <View style={{ gap: Spacing.two }}>
+          <ThemedText type="label">{status === 'used' ? 'What did you cook? (optional)' : 'What was wrong? (optional)'}</ThemedText>
+          <ChoicePills options={noteOptions} value={note} onChange={(n) => setNote((cur) => (cur === n ? null : n))} />
+        </View>
+      )}
       {value > 0 && (
         <Note icon={status === 'used' ? 'checkmark' : 'trash-outline'} tone={status === 'used' ? 'fresh' : 'danger'}>
           {status === 'used' ? `+${peso(value)} added to your savings this month` : `${peso(value)} counted as wasted this month`}
@@ -465,7 +545,7 @@ function FinishSheet({
       <Button
         title="Confirm"
         onPress={async () => {
-          await finishPantryItem(db, item, status, qty);
+          await finishPantryItem(db, item, status, qty, note);
           onDone(qty >= item.quantity);
         }}
       />

@@ -53,6 +53,22 @@
         {
           "iosUrlScheme": "com.googleusercontent.apps.1045250307755-iduldkk34c7ku5sp1pd80cmr4bbhm4qv"
         }
+      ],
+      "expo-asset",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "cocoJJAM uses the camera to check how fresh your food is. Photos stay on your phone.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": false
+        }
+      ],
+      [
+        "expo-sensors",
+        {
+          "motionPermission": "cocoJJAM uses motion to tell you when your phone is steady enough for a sharp photo."
+        }
       ]
     ],
     "experiments": {

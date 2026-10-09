@@ -38,17 +38,17 @@ export async function loadSamplePantry(db: SQLiteDatabase) {
     }
     // Used and wasted items earlier this month, so Savings has a story to tell (UC-8.1).
     const day = today.getDate();
-    const finished: { name: string; quantity: number; unit: string; status: 'used' | 'wasted'; daysAgo: number }[] = [
-      { name: 'pork', quantity: 500, unit: 'g', status: 'used', daysAgo: 1 },
-      { name: 'bangus', quantity: 2, unit: 'pc', status: 'used', daysAgo: 1 },
-      { name: 'galunggong', quantity: 6, unit: 'pc', status: 'used', daysAgo: 2 },
-      { name: 'tilapia', quantity: 1, unit: 'pc', status: 'wasted', daysAgo: 2 },
-      { name: 'chicken', quantity: 1, unit: 'kg', status: 'used', daysAgo: 6 },
-      { name: 'bangus', quantity: 1, unit: 'pc', status: 'wasted', daysAgo: 7 },
-      { name: 'beef', quantity: 500, unit: 'g', status: 'used', daysAgo: 9 },
-      { name: 'tilapia', quantity: 2, unit: 'pc', status: 'used', daysAgo: 12 },
-      { name: 'pork', quantity: 750, unit: 'g', status: 'used', daysAgo: 15 },
-      { name: 'chicken', quantity: 500, unit: 'g', status: 'wasted', daysAgo: 16 },
+    const finished: { name: string; quantity: number; unit: string; status: 'used' | 'wasted'; daysAgo: number; note: string }[] = [
+      { name: 'pork', quantity: 500, unit: 'g', status: 'used', daysAgo: 1, note: 'Pork Adobo' },
+      { name: 'bangus', quantity: 2, unit: 'pc', status: 'used', daysAgo: 1, note: 'Sinigang na Bangus' },
+      { name: 'galunggong', quantity: 6, unit: 'pc', status: 'used', daysAgo: 2, note: 'Pritong Galunggong' },
+      { name: 'tilapia', quantity: 1, unit: 'pc', status: 'wasted', daysAgo: 2, note: 'past estimate' },
+      { name: 'chicken', quantity: 1, unit: 'kg', status: 'used', daysAgo: 6, note: 'Chicken Adobo' },
+      { name: 'bangus', quantity: 1, unit: 'pc', status: 'wasted', daysAgo: 7, note: 'smelled off' },
+      { name: 'beef', quantity: 500, unit: 'g', status: 'used', daysAgo: 9, note: 'Bistek Tagalog' },
+      { name: 'tilapia', quantity: 2, unit: 'pc', status: 'used', daysAgo: 12, note: 'Pritong Tilapia' },
+      { name: 'pork', quantity: 750, unit: 'g', status: 'used', daysAgo: 15, note: 'Sinigang na Baboy' },
+      { name: 'chicken', quantity: 500, unit: 'g', status: 'wasted', daysAgo: 16, note: 'slimy' },
     ];
     for (const f of finished.filter((x) => x.daysAgo < day)) {
       const at = new Date(today);
@@ -66,7 +66,7 @@ export async function loadSamplePantry(db: SQLiteDatabase) {
         thumbnail_uri: null,
         paid_price_php: null,
       });
-      await db.runAsync(`UPDATE pantry_items SET status = ?, updated_at = ? WHERE id = ?`, f.status, at.getTime(), id);
+      await db.runAsync(`UPDATE pantry_items SET status = ?, finish_note = ?, updated_at = ? WHERE id = ?`, f.status, f.note, at.getTime(), id);
     }
 
     const yesterday = today.getTime() - 86_400_000;

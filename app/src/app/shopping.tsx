@@ -11,9 +11,10 @@ import { Card } from '@/components/card';
 import { Note } from '@/components/chat';
 import { Segmented, Sheet } from '@/components/controls';
 import { ThemedText } from '@/components/themed-text';
+import { ItemIcon } from '@/components/item-icon';
 import { Spacing } from '@/constants/theme';
 import { getProfile } from '@/db/profile';
-import { applySwap, listShopping, moveBoughtToPantry, proteinSwap, removeFromList, setChecked, type ShoppingItem } from '@/db/shopping';
+import { budgetSwaps, listShopping, moveBoughtToPantry, removeFromList, setChecked, type BudgetSwap, type ShoppingItem } from '@/db/shopping';
 import { budgetFrom, spentThisWeek } from '@/domain/budget';
 import { peso, proteinOf } from '@/domain/prices';
 import type { Storage } from '@/domain/types';
@@ -31,6 +32,8 @@ export default function ShoppingListScreen() {
   const theme = useTheme();
   const [data, reload] = useFocusQuery(load, null as Awaited<ReturnType<typeof load>> | null);
   const [moving, setMoving] = useState(false);
+  /** "Keep list as is": leave the N05 suggestions and show the list. */
+  const [kept, setKept] = useState(false);
 
   if (!data) return <SafeAreaView style={[styles.safe, { backgroundColor: theme.background }]} />;
   const { items, budget } = data;
@@ -39,7 +42,15 @@ export default function ShoppingListScreen() {
   const total = open.reduce((s, i) => s + (i.price ?? 0), 0);
   const recipes = [...new Set(items.map((i) => i.recipe_title ?? 'Other'))];
   const over = budget ? total - budget.left : 0;
-  const swaps = over > 0 ? open.map((i) => ({ i, s: proteinSwap(i) })).filter((x) => x.s) : [];
+  const swaps = over > 0 ? budgetSwaps(open) : [];
+  // N05: over budget with a way down → show just the warning and the suggestions.
+  const suggesting = swaps.length > 0 && !kept;
+  const afterAll = total - swaps.reduce((sum, w) => sum + w.saves, 0);
+
+  async function apply(list: BudgetSwap[]) {
+    for (const w of list) await w.apply(db);
+    reload();
+  }
 
   async function toggle(i: ShoppingItem) {
     await setChecked(db, i.id, !i.checked);
@@ -127,32 +138,32 @@ export default function ShoppingListScreen() {
           )}
 
           {/* N05: ways to get under budget */}
-          {swaps.length > 0 && (
+          {suggesting && (
             <View style={{ gap: Spacing.two }}>
               <ThemedText type="caption" themeColor="textSecondary">
                 WAYS TO GET UNDER BUDGET
               </ThemedText>
               <Card style={{ gap: 0, paddingVertical: Spacing.one }}>
-                {swaps.map(({ i, s }, n) => (
-                  <View key={i.id} style={[styles.row, n > 0 && { borderTopWidth: 1, borderTopColor: theme.backgroundSelected }]}>
+                {swaps.map((w, n) => (
+                  <View key={w.item.id} style={[styles.row, n > 0 && { borderTopWidth: 1, borderTopColor: theme.backgroundSelected }]}>
+                    <SwapThumbs from={w.from} to={w.to} />
                     <View style={{ flex: 1 }}>
-                      <ThemedText type="smallBold">Swap {i.name.toLowerCase()} for chicken</ThemedText>
+                      <ThemedText type="smallBold">{w.title}</ThemedText>
                       <ThemedText type="caption" themeColor="textSecondary">
-                        {i.recipe_title} · same weight, {i.amount.split(',')[0]}
+                        {w.reason}
                       </ThemedText>
                     </View>
-                    <Button
-                      title={`Save ${peso(s!.saves)}`}
-                      size="small"
-                      variant="soft"
-                      onPress={async () => {
-                        await applySwap(db, i, s!.price);
-                        reload();
-                      }}
-                    />
+                    <Button title={`Save ${peso(w.saves)}`} size="small" variant="soft" onPress={() => apply([w])} />
                   </View>
                 ))}
               </Card>
+              <View style={styles.inline}>
+                <Ionicons name="information-circle-outline" size={14} color={theme.textSecondary} />
+                <ThemedText type="caption" themeColor={budget && afterAll <= budget.left ? 'fresh' : 'textSecondary'} style={{ flex: 1 }}>
+                  {`${swaps.length === 1 ? 'This swap' : swaps.length === 2 ? 'Swapping both' : `Swapping all ${swaps.length}`} brings the list to ≈ ${peso(afterAll)}.`}
+                  {budget && afterAll > budget.left ? ` Still ${peso(afterAll - budget.left)} over.` : ''}
+                </ThemedText>
+              </View>
             </View>
           )}
           {over > 0 && swaps.length === 0 && (
@@ -161,7 +172,7 @@ export default function ShoppingListScreen() {
             </Note>
           )}
 
-          {recipes.map((r) => {
+          {!suggesting && recipes.map((r) => {
             const rows = items.filter((i) => (i.recipe_title ?? 'Other') === r);
             return (
               <View key={r} style={{ gap: Spacing.two }}>
@@ -182,7 +193,22 @@ export default function ShoppingListScreen() {
         </ScrollView>
       )}
 
-      {bought.length > 0 && (
+      {suggesting && (
+        <View style={[styles.footer, { gap: Spacing.two }]}>
+          <Button
+            title={swaps.length === 1 ? 'Apply swap' : swaps.length === 2 ? 'Apply both swaps' : `Apply all ${swaps.length} swaps`}
+            icon="swap-horizontal"
+            onPress={() => apply(swaps)}
+          />
+          <Pressable onPress={() => setKept(true)} style={styles.textButton}>
+            <ThemedText type="label" themeColor="tintText">
+              Keep list as is
+            </ThemedText>
+          </Pressable>
+        </View>
+      )}
+
+      {!suggesting && bought.length > 0 && (
         <View style={styles.footer}>
           <Button title={`Done shopping · ${bought.length} bought`} icon="bag-check-outline" onPress={() => setMoving(true)} />
         </View>
@@ -287,6 +313,21 @@ function MoveSheet({ bought, onClose, onDone }: { bought: ShoppingItem[]; onClos
   );
 }
 
+/** Two overlapping thumbnails: the item and what replaces it (a leaf for vegetables). */
+function SwapThumbs({ from, to }: { from: string; to: string | null }) {
+  const theme = useTheme();
+  const icon = (item: string) =>
+    proteinOf(item) ? <ItemIcon name={item} size={18} /> : <Ionicons name="leaf-outline" size={18} color={theme.fresh} />;
+  return (
+    <View style={styles.thumbs}>
+      <View style={[styles.thumb, { backgroundColor: theme.highlight, borderColor: theme.backgroundElement }]}>{icon(from)}</View>
+      <View style={[styles.thumb, styles.thumbBack, { backgroundColor: to ? theme.freshSoft : theme.backgroundSelected, borderColor: theme.backgroundElement }]}>
+        {to ? icon(to) : <Ionicons name="remove" size={18} color={theme.textSecondary} />}
+      </View>
+    </View>
+  );
+}
+
 function RoundButton({ icon, label, onPress }: { icon: keyof typeof Ionicons.glyphMap; label: string; onPress: () => void }) {
   const theme = useTheme();
   return (
@@ -310,4 +351,7 @@ const styles = StyleSheet.create({
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.three, paddingHorizontal: Spacing.four },
   emptyIcon: { width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center' },
   textButton: { alignItems: 'center', paddingVertical: Spacing.two },
+  thumbs: { flexDirection: 'row', width: 62 },
+  thumb: { width: 38, height: 38, borderRadius: 10, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
+  thumbBack: { marginLeft: -14 },
 });

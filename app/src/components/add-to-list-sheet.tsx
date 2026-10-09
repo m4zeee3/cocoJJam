@@ -33,7 +33,8 @@ export function AddToListSheet({
   const [picked, setPicked] = useState<Set<string>>(new Set(missing.map((l) => l.item)));
   const chosen = missing.filter((l) => picked.has(l.item));
   const total = chosen.reduce((s, l) => s + l.toBuy, 0);
-  const inPantry = view.lines.length - missing.length;
+  const have = view.lines.filter((l) => l.have === 'all').map((l) => l.name.toLowerCase());
+  const haveText = have.length === 0 ? '' : have.length === 1 ? `${have[0]} is` : `${have.slice(0, -1).join(', ')} and ${have[have.length - 1]} are`;
 
   function toggle(item: string) {
     setPicked((cur) => {
@@ -47,9 +48,9 @@ export function AddToListSheet({
   return (
     <Sheet visible onClose={onClose}>
       <View>
-        <ThemedText type="section">Add missing items to your list</ThemedText>
+        <ThemedText type="section">Add to your shopping list</ThemedText>
         <ThemedText type="caption" themeColor="textSecondary">
-          {view.title} · you already have {inPantry} of {view.lines.length}
+          {view.title} · {haveText ? `${haveText} already in your pantry. Untick anything else you have at home.` : 'Untick anything you already have at home.'}
         </ThemedText>
       </View>
       <Card style={{ gap: 0, paddingVertical: Spacing.one }}>

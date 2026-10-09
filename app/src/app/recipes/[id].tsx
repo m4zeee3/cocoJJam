@@ -313,7 +313,7 @@ function Detail({
           {/* N03 / UC-9.1 */}
           <View style={{ flex: 1 }}>
             {missingCount > 0 ? (
-              <Button title={`Add ${missingCount} to list`} icon="list" onPress={() => setSheet({ kind: 'list' })} />
+              <Button title={`Add ${missingCount} to shopping list`} icon="list" onPress={() => setSheet({ kind: 'list' })} />
             ) : (
               <Button title="All in your pantry" icon="checkmark" variant="soft" onPress={() => {}} disabled />
             )}

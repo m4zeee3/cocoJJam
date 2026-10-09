@@ -71,9 +71,9 @@ function EditHousehold({ initial, isNew }: { initial: Profile; isNew: boolean })
           />
         </Card>
         <View style={styles.inline}>
-          <Ionicons name="phone-portrait-outline" size={12} color={theme.textSecondary} />
+          <Ionicons name="information-circle-outline" size={12} color={theme.textSecondary} />
           <ThemedText type="caption" themeColor="textSecondary">
-            Saved on this phone · syncs if you sign in. Changes apply to your next recommendation.
+            Changes apply to your next recommendation.
           </ThemedText>
         </View>
       </ScrollView>

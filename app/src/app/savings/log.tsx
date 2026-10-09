@@ -13,6 +13,7 @@ import { ItemIcon } from '@/components/item-icon';
 import { Spacing } from '@/constants/theme';
 import { listFinished, monthRange } from '@/db/savings';
 import { pantryValue, peso } from '@/domain/prices';
+import { weightKg } from '@/domain/savings';
 import { UNIT_LABEL } from '@/domain/types';
 import { useFocusQuery } from '@/hooks/use-pantry';
 import { useTheme } from '@/hooks/use-theme';
@@ -26,6 +27,18 @@ const load = (db: SQLiteDatabase) => {
 
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
+/** "2 pcs (about 500 g)", "250 g", "1 kg": pieces get an estimated weight. */
+function amountText(i: Item) {
+  const unit = UNIT_LABEL[i.unit] ?? i.unit;
+  const plural = i.unit === 'pc' && i.quantity !== 1 ? 'pcs' : unit;
+  const base = `${i.quantity} ${plural}`;
+  if (i.unit === 'g' || i.unit === 'kg') return base;
+  const kg = weightKg(i);
+  if (!kg) return base;
+  const g = Math.round((kg * 1000) / 50) * 50;
+  return `${base} (about ${g >= 1000 ? `${Math.round(g / 100) / 10} kg` : `${g} g`})`;
+}
+
 /** N02 item log: used vs wasted this month (UC-8.1), the table view behind the chart. */
 export default function ItemLogScreen() {
   const theme = useTheme();
@@ -33,6 +46,8 @@ export default function ItemLogScreen() {
   const [filter, setFilter] = useState<'all' | 'used' | 'wasted'>('all');
   const shown = filter === 'all' ? items : items.filter((i) => i.status === filter);
   const month = new Date().toLocaleDateString('en-US', { month: 'long' });
+  // Values are the paid price when known (Palengke Mode, shopping list), else this month's midpoint.
+  const prices = items.some((i) => i.paid_price_php != null) ? 'paid or midpoint prices' : 'midpoint prices';
 
   const days: { day: string; rows: Item[] }[] = [];
   for (const i of shown) {
@@ -51,7 +66,7 @@ export default function ItemLogScreen() {
         <View>
           <ThemedText type="section">Item log</ThemedText>
           <ThemedText type="caption" themeColor="textSecondary">
-            {month} · from Used and Wasted in your pantry
+            {month} so far · at {prices}
           </ThemedText>
         </View>
       </View>
@@ -90,11 +105,10 @@ export default function ItemLogScreen() {
                     <View style={{ flex: 1 }}>
                       <ThemedText type="smallBold">{capitalize(i.name)}</ThemedText>
                       <ThemedText type="caption" themeColor={used ? 'fresh' : 'danger'}>
-                        {used ? 'Used' : 'Wasted'} · {i.quantity} {UNIT_LABEL[i.unit] ?? i.unit}
+                        {[used ? 'Used' : 'Wasted', amountText(i), i.finish_note].filter(Boolean).join(' · ')}
                       </ThemedText>
                     </View>
                     <ThemedText type="smallBold" themeColor={used ? 'fresh' : 'danger'}>
-                      {used ? '+' : '−'}
                       {peso(pantryValue(i))}
                     </ThemedText>
                   </View>

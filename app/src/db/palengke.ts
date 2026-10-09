@@ -3,7 +3,7 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 
 import { addPantryItem } from '@/db/pantry';
 import { estimateCookBy, toIsoDate } from '@/domain/cook-by';
-import type { VendorUnit, VerdictKind } from '@/domain/palengke';
+import { unitKg, type VendorUnit, type VerdictKind } from '@/domain/palengke';
 import type { Stage, Storage } from '@/domain/types';
 
 export type PalengkeCheck = {
@@ -15,7 +15,10 @@ export type PalengkeCheck = {
   price: number;
   unit: VendorUnit;
   verdict: VerdictKind;
+  /** "Stall 1", "Stall 2"… in the order checked this trip. */
   stall: string;
+  /** Optional name the user gave the stall, e.g. "Aling Nena". */
+  stall_name: string | null;
   photo_uri: string | null;
   bought: number;
 };
@@ -28,7 +31,7 @@ function startOfToday() {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 }
 
-export async function addCheck(db: SQLiteDatabase, c: Omit<PalengkeCheck, 'id' | 'created_at' | 'bought'>) {
+export async function addCheck(db: SQLiteDatabase, c: Omit<PalengkeCheck, 'id' | 'created_at' | 'bought' | 'stall_name'>) {
   const id = randomUUID();
   await db.runAsync(
     `INSERT INTO palengke_checks (id, created_at, item, cut, stage, price, unit, verdict, stall, photo_uri)
@@ -54,8 +57,8 @@ export function listTripChecks(db: SQLiteDatabase, item: string, cut: string | n
   );
 }
 
-export function renameStall(db: SQLiteDatabase, id: string, stall: string) {
-  return db.runAsync(`UPDATE palengke_checks SET stall = ? WHERE id = ?`, stall, id);
+export function nameStall(db: SQLiteDatabase, id: string, name: string) {
+  return db.runAsync(`UPDATE palengke_checks SET stall_name = ? WHERE id = ?`, name, id);
 }
 
 /**
@@ -64,11 +67,13 @@ export function renameStall(db: SQLiteDatabase, id: string, stall: string) {
  */
 export async function buyFromCheck(db: SQLiteDatabase, check: PalengkeCheck, storage: Storage = 'ref') {
   const est = estimateCookBy(check.item, storage, check.stage, 'today');
-  const unit = check.unit === 'tali' ? 'bundle' : check.unit;
+  // A tumpok or tray goes in the pantry as its rough weight in kg.
+  const kg = check.unit === 'tumpok' || check.unit === 'tray' ? unitKg(check.item, check.unit) : null;
+  const unit = kg ? 'kg' : (check.unit as string) === 'tali' ? 'bundle' : check.unit; // older checks
   const pantryId = await addPantryItem(db, {
     name: check.item,
     category: check.cut,
-    quantity: 1,
+    quantity: kg ?? 1,
     unit,
     storage,
     stage: check.stage,

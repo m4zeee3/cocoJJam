@@ -6,6 +6,7 @@
 
 const FISH = ['bangus', 'tilapia', 'galunggong', 'patis'];
 const SHELLFISH = ['shrimp', 'hipon', 'pusit', 'bagoong', 'alamang'];
+const SQUID = ['pusit'];
 
 /** English and Filipino words → ingredient keys used in recipes.json. */
 const ALIASES: Record<string, string[]> = {
@@ -16,6 +17,7 @@ const ALIASES: Record<string, string[]> = {
   meat: ['pork', 'chicken', 'beef'], karne: ['pork', 'chicken', 'beef'],
   fish: FISH, isda: FISH, milkfish: ['bangus'], 'round scad': ['galunggong'],
   seafood: [...FISH, ...SHELLFISH], shellfish: SHELLFISH, shrimp: SHELLFISH, hipon: SHELLFISH,
+  squid: SQUID, pusit: SQUID, calamari: SQUID,
   egg: ['egg'], eggs: ['egg'], itlog: ['egg'],
   peanut: ['peanut'], peanuts: ['peanut'], mani: ['peanut'],
   'soy sauce': ['soy sauce'], soy: ['soy sauce'], toyo: ['soy sauce'],
@@ -58,9 +60,4 @@ export function ingredientsFor(text: string, known: Iterable<string>): Set<strin
   }
   for (const k of known) if (term === k || rest.includes(k) || (k.includes(term) && term.length >= 4)) out.add(k);
   return out;
-}
-
-/** Whether the app can filter by this term at all (shown as a hint when it can't). */
-export function understands(text: string, known: Iterable<string>) {
-  return ingredientsFor(text, known).size > 0;
 }

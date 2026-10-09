@@ -85,7 +85,7 @@ export default function CompareStallsScreen() {
                   )}
                 </View>
                 <ThemedText type="caption" themeColor="textSecondary">
-                  {time(s.created_at)}
+                  {[c.stall_name, time(s.created_at)].filter(Boolean).join(' · ')}
                 </ThemedText>
                 <StagePill stage={s.stage} />
               </View>

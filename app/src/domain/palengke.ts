@@ -11,10 +11,30 @@ export const REFERENCE_DATE = (() => {
   return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 })();
 
-/** Units a vendor may quote. A tali is a bundle. */
-export type VendorUnit = 'kg' | 'pc' | 'tali' | 'bundle';
-export const VENDOR_UNIT_LABEL: Record<VendorUnit, string> = { kg: 'per kg', pc: 'per piece', tali: 'per tali', bundle: 'per bundle' };
-const SHORT_UNIT: Record<string, string> = { kg: 'kg', pc: 'pc', tali: 'tali', bundle: 'bundle', pack: 'pack', bottle: 'bottle' };
+/** Units a meat or fish vendor may quote. A tumpok is a small pile of fish; a tray is a pre-packed tray. */
+export type VendorUnit = 'kg' | 'pc' | 'tumpok' | 'tray';
+export const VENDOR_UNIT_LABEL: Record<VendorUnit, string> = { kg: 'per kg', pc: 'per piece', tumpok: 'per tumpok', tray: 'per tray' };
+// tali/bundle: older checks saved before the meat-and-fish scope.
+const SHORT_UNIT: Record<string, string> = { kg: 'kg', pc: 'pc', tumpok: 'tumpok', tray: 'tray', tali: 'tali', bundle: 'bundle', pack: 'pack', bottle: 'bottle' };
+
+/**
+ * About how many kg one tumpok or tray holds, to turn a vendor's price into a per-kg price (UC-6.5).
+ * Sample values: piles and trays vary, so the tip always says to ask the vendor.
+ */
+const UNIT_KG: Record<'tumpok' | 'tray', Record<string, number>> = {
+  tumpok: { galunggong: 0.4, tilapia: 1, bangus: 1, default: 0.5 },
+  tray: { chicken: 1, pork: 0.5, beef: 0.5, default: 0.5 },
+};
+
+/** Typical kg in one `unit` of `item` (piece weight from the price table), or null when unknown. */
+export function unitKg(item: string, unit: VendorUnit): number | null {
+  if (unit === 'kg') return 1;
+  if (unit === 'pc') return TABLE[item]?.piece_qty ?? null;
+  const w = UNIT_KG[unit];
+  return w ? (w[item] ?? w.default) : null;
+}
+
+const UNIT_NOUN: Record<VendorUnit, string> = { kg: 'kilo', pc: 'piece', tumpok: 'tumpok', tray: 'tray' };
 
 export function unitShort(u: string) {
   return SHORT_UNIT[u] ?? u;
@@ -28,16 +48,22 @@ export function variantsOf(item: string) {
 
 export type Reference = { low: number; high: number; unit: string };
 
+/** M03b "Not sure": generic fish spans every fish species in the table. */
+function generalFishRange(): Reference | null {
+  const rows = Object.values(TABLE).filter((r) => (r as { category?: string }).category === 'fish' && r.unit === 'kg');
+  if (!rows.length) return null;
+  return { low: Math.min(...rows.map((r) => r.low)), high: Math.max(...rows.map((r) => r.high)), unit: 'kg' };
+}
+
 /** This month's usual range for the item (and cut), in the table's unit. Null when not in the table. */
 export function usualRange(item: string, cut?: string | null): Reference | null {
   const row = TABLE[item];
-  if (!row) return null;
+  if (!row) return item === 'fish' ? generalFishRange() : null;
   const v = cut ? row.variants?.[cut] : undefined;
   return { low: v?.low ?? row.low, high: v?.high ?? row.high, unit: row.unit };
 }
 
-const sameUnit = (vendor: VendorUnit, table: string) =>
-  vendor === table || ((vendor === 'tali' || vendor === 'bundle') && table === 'bundle');
+const sameUnit = (vendor: VendorUnit, table: string) => vendor === table;
 
 export type VerdictKind = 'good_buy' | 'haggle' | 'cook_today' | 'skip' | 'dont_buy' | 'no_reference';
 export type PriceBand = 'below' | 'within' | 'above';
@@ -64,13 +90,14 @@ export function judge(item: string, cut: string | null, stage: Stage, price: num
   }
   const ref = usualRange(item, cut);
   if (!ref || !sameUnit(unit, ref.unit)) {
-    const row = TABLE[item];
     let unitTip: string | undefined;
-    if (ref && unit === 'pc' && ref.unit === 'kg' && row?.piece_qty) {
-      const perKg = Math.round(price / row.piece_qty);
-      const grams = Math.round(row.piece_qty * 1000);
+    const kg = unitKg(item, unit);
+    if (ref && ref.unit === 'kg' && kg) {
+      const perKg = Math.round(price / kg);
+      const grams = Math.round(kg * 1000);
       const inRange = perKg >= ref.low && perKg <= ref.high ? 'within' : perKg > ref.high ? 'above' : 'below';
-      unitTip = `Ask the vendor how heavy one piece is. At about ${grams} g, ₱${price} works out to roughly ₱${perKg}/kg, which is ${inRange} the usual range.`;
+      const size = grams >= 1000 ? `${kg} kg` : `${grams} g`;
+      unitTip = `Ask the vendor how heavy one ${UNIT_NOUN[unit]} is. At about ${size}, ₱${price} works out to roughly ₱${perKg}/kg, which is ${inRange} the usual range.`;
     } else if (ref) {
       unitTip = `Ask how much it weighs to compare with the usual ₱${ref.low}–₱${ref.high} per ${unitShort(ref.unit)}.`;
     }

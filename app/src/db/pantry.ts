@@ -22,11 +22,13 @@ export type PantryItem = {
   thumbnail_uri: string | null;
   paid_price_php: number | null;
   status: 'active' | 'used' | 'wasted';
+  /** Used: the dish it went into ("Sinigang na Bangus"). Wasted: why ("slimy", "past estimate"). */
+  finish_note: string | null;
 };
 
 export type NewPantryItem = Omit<
   PantryItem,
-  'id' | 'status' | 'rescan_tomorrow' | 'scan_count' | 'added_at' | 'purchase'
+  'id' | 'status' | 'rescan_tomorrow' | 'scan_count' | 'added_at' | 'purchase' | 'finish_note'
 > & {
   purchase?: Purchase;
   rescan_tomorrow?: boolean;
@@ -61,7 +63,7 @@ export function getPantryItem(db: SQLiteDatabase, id: string): Promise<PantryIte
 
 const EDITABLE = [
   'name', 'quantity', 'unit', 'storage', 'stage', 'confidence', 'purchase',
-  'cook_by', 'rescan_tomorrow', 'scan_count', 'status', 'thumbnail_uri',
+  'cook_by', 'rescan_tomorrow', 'scan_count', 'status', 'thumbnail_uri', 'finish_note',
 ] as const;
 export type PantryPatch = Partial<Pick<PantryItem, (typeof EDITABLE)[number]>>;
 
@@ -98,9 +100,15 @@ export function recompute(item: PantryItem, changes: Partial<Pick<PantryItem, 's
  * UC-2.5: mark some or all of an item as used or wasted. A partial amount
  * splits off into its own row so the savings tracker counts just that part.
  */
-export async function finishPantryItem(db: SQLiteDatabase, item: PantryItem, status: 'used' | 'wasted', qty: number) {
+export async function finishPantryItem(
+  db: SQLiteDatabase,
+  item: PantryItem,
+  status: 'used' | 'wasted',
+  qty: number,
+  note: string | null = null,
+) {
   if (qty >= item.quantity) {
-    await updatePantryItem(db, item.id, { status });
+    await updatePantryItem(db, item.id, { status, finish_note: note ?? undefined });
     return;
   }
   // A paid price is for the whole amount, so split it with the quantity.
@@ -115,13 +123,13 @@ export async function finishPantryItem(db: SQLiteDatabase, item: PantryItem, sta
       paid_price_php: paid == null ? null : paid * share,
       rescan_tomorrow: !!item.rescan_tomorrow,
     });
-    await updatePantryItem(db, id, { status });
+    await updatePantryItem(db, id, { status, finish_note: note ?? undefined });
   });
 }
 
-/** Kept for the scanner's "Log as wasted" (UC-1.6). */
-export function setPantryStatus(db: SQLiteDatabase, id: string, status: 'used' | 'wasted') {
-  return updatePantryItem(db, id, { status });
+/** Kept for the scanner's "Log as wasted" (UC-1.6); `note` says why ("looked spoiled"). */
+export function setPantryStatus(db: SQLiteDatabase, id: string, status: 'used' | 'wasted', note?: string) {
+  return updatePantryItem(db, id, { status, finish_note: note });
 }
 
 /** UC-2.8: delete without counting it as waste. */

@@ -6,12 +6,13 @@ import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Button } from '@/components/button';
 import { Card } from '@/components/card';
+import { Note } from '@/components/chat';
 import { Segmented, Sheet } from '@/components/controls';
 import { ThemedText } from '@/components/themed-text';
 import { Spacing, type ThemeColor } from '@/constants/theme';
 import type { PalengkeCheck } from '@/db/palengke';
 import { getPantryItem, recompute, updatePantryItem } from '@/db/pantry';
-import { daysUntil, longCountdown } from '@/domain/cook-by';
+import { daysUntil, estimateCookBy, longCountdown, parseIsoDate, type Safety } from '@/domain/cook-by';
 import { unitShort, type Reference, type VerdictKind } from '@/domain/palengke';
 import type { Storage } from '@/domain/types';
 import { useTheme } from '@/hooks/use-theme';
@@ -61,10 +62,19 @@ export function verdictColor(kind: VerdictKind): ThemeColor {
   return VERDICT_STYLE[kind].fg;
 }
 
-/** Big verdict banner at the top of a check (M04–M08, M11–M12). */
-export function VerdictCard({ kind, title, body }: { kind: VerdictKind | 'trade_off'; title: string; body: string }) {
+type BannerStyle = { icon: keyof typeof Ionicons.glyphMap; fg: ThemeColor; bg: ThemeColor };
+const EXTRA_STYLE: Record<'trade_off' | 'retake' | 'cant_check', BannerStyle> = {
+  trade_off: { icon: 'scale-outline', fg: 'amber', bg: 'amberSoft' },
+  /** M14: freshness unclear, get closer. */
+  retake: { icon: 'scan', fg: 'amber', bg: 'amberSoft' },
+  /** M15: the photo can't be checked. */
+  cant_check: { icon: 'close', fg: 'textSecondary', bg: 'backgroundSelected' },
+};
+
+/** Big verdict banner at the top of a check (M04–M08, M11–M15). */
+export function VerdictCard({ kind, title, body }: { kind: VerdictKind | keyof typeof EXTRA_STYLE; title: string; body: string }) {
   const theme = useTheme();
-  const s = kind === 'trade_off' ? { icon: 'scale-outline' as const, fg: 'amber' as ThemeColor, bg: 'amberSoft' as ThemeColor } : VERDICT_STYLE[kind];
+  const s = kind in EXTRA_STYLE ? EXTRA_STYLE[kind as keyof typeof EXTRA_STYLE] : VERDICT_STYLE[kind as VerdictKind];
   return (
     <View style={[styles.verdict, { backgroundColor: theme[s.bg] }]}>
       <View style={[styles.verdictIcon, { backgroundColor: theme[s.fg] }]}>
@@ -128,6 +138,7 @@ export function BoughtSheet({
   const theme = useTheme();
   const [storage, setStorage] = useState<Storage>('ref');
   const [left, setLeft] = useState(daysLeft);
+  const [safety, setSafety] = useState<Safety>('ok');
 
   async function changeStorage(s: Storage) {
     setStorage(s);
@@ -136,6 +147,7 @@ export function BoughtSheet({
     const patch = recompute(item, { storage: s });
     await updatePantryItem(db, pantryId, patch);
     setLeft(daysUntil(patch.cook_by!));
+    setSafety(estimateCookBy(item.name, s, item.stage, item.purchase, parseIsoDate(item.date_added)).safety);
   }
 
   const unit = unitShort(check.unit);
@@ -155,7 +167,12 @@ export function BoughtSheet({
       <Card tone="background" style={{ gap: 0, paddingVertical: Spacing.one, borderColor: theme.backgroundSelected }}>
         <Row icon="time-outline" label="Bought" value="Today" />
         <Row icon="card-outline" label="Paid" value={`₱${check.price}/${unit} · ₱${check.price} total`} divider />
-        <Row icon="restaurant-outline" label="Cook within" value={longCountdown(left)} divider />
+        <Row
+          icon="restaurant-outline"
+          label="Cook within"
+          value={safety === 'counter_now' ? '2 hours, or ref it' : longCountdown(left)}
+          divider
+        />
       </Card>
       <View style={{ gap: Spacing.two }}>
         <ThemedText type="label">Where will you keep it?</ThemedText>
@@ -168,6 +185,11 @@ export function BoughtSheet({
             { value: 'counter', label: 'Counter' },
           ]}
         />
+        {safety === 'counter_now' && (
+          <Note icon="warning-outline" tone="danger">
+            Raw meat and fish shouldn&apos;t sit out more than 2 hours (1 hour on hot days). Put it in the ref or cook it soon.
+          </Note>
+        )}
         <ThemedText type="caption" themeColor="textSecondary">
           The price you paid is used in your Savings tracker.
         </ThemedText>

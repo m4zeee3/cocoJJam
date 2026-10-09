@@ -10,8 +10,23 @@ const DAYS_AGO: Record<Exclude<Purchase, 'not_sure'>, number> = {
   over_a_week: 8,
 };
 
+/**
+ * - ok: inside the usual window.
+ * - counter_now: raw meat or fish out on the counter, bought today: fridge it or cook it within hours.
+ * - past_window: past the safe window (out on the counter since an earlier day or for an unknown
+ *   time, or bought longer ago than the fridge keeps it). Never "cook today".
+ */
+export type Safety = 'ok' | 'counter_now' | 'past_window';
+
 export type CookByEstimate = {
+  /**
+   * The safe (shorter) end of the window, used for the saved cook-by date, the pantry
+   * countdown and reminders. Negative when past the safe window.
+   */
   daysLeft: number;
+  /** The longer end, for showing the window as a range ("3–5 days", "4–6 months"). */
+  maxDays: number;
+  safety: Safety;
   cookBy: Date;
   confidence: Confidence;
   rescanTomorrow: boolean;
@@ -19,9 +34,10 @@ export type CookByEstimate = {
 
 /**
  * Suggested cook-by window from the shelf-life table, visual stage and storage.
- * Known purchase date (UC-1.1): count down from the table range, capped by stage.
- * "Not sure" (UC-1.3): use the stage alone, take the shorter end, lower confidence,
- * and tag the item to rescan tomorrow.
+ * Known purchase date (UC-1.1): count both ends of the table range down from the
+ * purchase date, capped by stage; the cook-by date is the shorter end, so the
+ * pantry plays it safe. "Not sure" (UC-1.3): use the stage alone, the shorter end
+ * only, lower confidence, and tag the item to rescan tomorrow.
  */
 export function estimateCookBy(
   item: string,
@@ -39,19 +55,35 @@ export function estimateCookBy(
   };
 
   let daysLeft: number;
+  let maxDays: number;
   let confidence: Confidence;
   if (purchase === 'not_sure') {
-    daysLeft = Math.min(min, stageCap[stage]);
+    daysLeft = maxDays = Math.min(min, stageCap[stage]);
     confidence = 'low';
   } else {
-    daysLeft = Math.min(max - DAYS_AGO[purchase], stageCap[stage]);
+    daysLeft = Math.min(min - DAYS_AGO[purchase], stageCap[stage]);
+    maxDays = Math.min(max - DAYS_AGO[purchase], stageCap[stage]);
     confidence = stage === 'fresh' || stage === 'good' ? 'high' : 'medium';
   }
-  daysLeft = Math.max(0, daysLeft);
+
+  // Raw meat and fish shouldn't sit out over 2 hours (1 hour on hot days), so a counter item
+  // from an earlier day, or for an unknown time, is past safe whatever it looks like.
+  let safety: Safety = 'ok';
+  // Past the safe window only when even the longer end has passed.
+  if (storage === 'counter') safety = purchase === 'today' ? 'counter_now' : 'past_window';
+  else if (maxDays < 0) safety = 'past_window';
+
+  if (safety === 'past_window') {
+    daysLeft = maxDays = -1;
+    confidence = 'high';
+  } else {
+    daysLeft = Math.max(0, daysLeft);
+    maxDays = Math.max(daysLeft, maxDays);
+  }
 
   const cookBy = new Date(now);
   cookBy.setDate(cookBy.getDate() + daysLeft);
-  return { daysLeft, cookBy, confidence, rescanTomorrow: purchase === 'not_sure' };
+  return { daysLeft, maxDays, safety, cookBy, confidence, rescanTomorrow: purchase === 'not_sure' && safety === 'ok' };
 }
 
 /** UC-2.2 urgency groups. */

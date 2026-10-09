@@ -183,6 +183,11 @@ export function viewRecipe(recipe: Recipe, pantry: PantryItem[], servings = reci
   };
 }
 
+/** Dishes that use `item`, for "What did you cook?" when an item is marked Used (N02). */
+export function dishesWith(item: string) {
+  return RECIPES.filter((r) => r.ingredients.some((i) => i.item === item)).map((r) => r.title);
+}
+
 export function getRecipe(id: string) {
   return RECIPES.find((r) => r.id === id) ?? null;
 }

@@ -116,9 +116,6 @@ export default function SettingsScreen() {
               </View>
               <View style={{ flex: 1 }}>
                 <ThemedText type="smallBold">Guest</ThemedText>
-                <ThemedText type="caption" themeColor="textSecondary">
-                  Everything is saved on this phone only.
-                </ThemedText>
               </View>
             </View>
             {GOOGLE_AVAILABLE ? (

@@ -55,6 +55,59 @@ export function PhotoBubble({ uri }: { uri: string }) {
   );
 }
 
+/** Several photos sent at once (multi-photo scan), as one bubble. */
+export function PhotoGrid({ uris }: { uris: string[] }) {
+  const theme = useTheme();
+  return (
+    <View style={[styles.grid, { backgroundColor: theme.highlight }]}>
+      {uris.map((uri, i) => (
+        <View key={i} style={styles.gridCell}>
+          <Image source={{ uri }} style={StyleSheet.absoluteFill} contentFit="cover" />
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/** Time line between scans in the thread: "Today 5:09 PM". */
+export function TimeDivider({ at }: { at: number }) {
+  const d = new Date(at);
+  const today = new Date();
+  const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  const day =
+    d.toDateString() === today.toDateString()
+      ? 'Today'
+      : d.toDateString() === yesterday.toDateString()
+        ? 'Yesterday'
+        : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  return (
+    <ThemedText type="caption" themeColor="textSecondary" style={styles.divider}>
+      {day} {time}
+    </ThemedText>
+  );
+}
+
+/** A bubble of photo tips, one icon per line (S10, S14b, S15). */
+export function TipList({ title, tips }: { title?: string; tips: { icon: keyof typeof Ionicons.glyphMap; text: string }[] }) {
+  const theme = useTheme();
+  return (
+    <BotBubble>
+      {title ? <ThemedText type="label">{title}</ThemedText> : null}
+      {tips.map((t) => (
+        <View key={t.text} style={styles.tip}>
+          <View style={[styles.tipIcon, { backgroundColor: theme.highlight }]}>
+            <Ionicons name={t.icon} size={12} color={theme.tint} />
+          </View>
+          <ThemedText type="caption" style={{ flex: 1 }}>
+            {t.text}
+          </ThemedText>
+        </View>
+      ))}
+    </BotBubble>
+  );
+}
+
 /** A tinted note inside a card, e.g. the meat and fish smell check. */
 export function Note({
   icon,
@@ -115,6 +168,11 @@ const styles = StyleSheet.create({
     borderWidth: 4,
     overflow: 'hidden',
   },
+  tip: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  grid: { alignSelf: 'flex-end', width: '62%', flexDirection: 'row', flexWrap: 'wrap', gap: 4, padding: 4, borderRadius: 16 },
+  gridCell: { width: '48.5%', aspectRatio: 1, borderRadius: 10, overflow: 'hidden' },
+  divider: { textAlign: 'center', marginTop: Spacing.two },
+  tipIcon: { width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
   note: { flexDirection: 'row', gap: Spacing.two, borderRadius: 12, padding: Spacing.two + 2 },
   noteIcon: { marginTop: 1 },
 });

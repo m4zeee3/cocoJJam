@@ -7,10 +7,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Card } from '@/components/card';
 import { ChoicePills } from '@/components/controls';
 import { ItemIcon } from '@/components/item-icon';
-import { ChangePill, itemName, WhySheet } from '@/components/price-sheets';
+import { Pill } from '@/components/badges';
+import { itemName, WhySheet } from '@/components/price-sheets';
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
-import { REFERENCE_DATE } from '@/domain/palengke';
 import { allPrices, changeLabel, NOTABLE_CHANGE, PRICE_ATTRIBUTION, PRICE_SOURCE, priceMonth, type Protein } from '@/domain/prices';
 import { useTheme } from '@/hooks/use-theme';
 
@@ -45,16 +45,6 @@ export default function MarketPricesScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
-        <Card tone="backgroundSelected" style={styles.offline}>
-          <Ionicons name="phone-portrait-outline" size={16} color={theme.textSecondary} />
-          <View style={{ flex: 1 }}>
-            <ThemedText type="smallBold">Saved on this phone</ThemedText>
-            <ThemedText type="caption" themeColor="textSecondary">
-              Works offline. Prices as of {REFERENCE_DATE}, refreshed with each app update.
-            </ThemedText>
-          </View>
-        </Card>
-
         <ChoicePills options={FILTERS} value={filter} onChange={setFilter} />
 
         {moving.length > 0 && (
@@ -63,20 +53,27 @@ export default function MarketPricesScreen() {
               MOVING THIS MONTH
             </ThemedText>
             <View style={styles.movingRow}>
-              {moving.slice(0, 2).map((p) => (
-                <Pressable key={p.item} onPress={() => setWhy(p.item)} style={{ flex: 1 }} accessibilityRole="button">
-                  <Card style={{ gap: Spacing.one }}>
-                    <View style={styles.between}>
-                      <ItemIcon name={p.item} size={20} />
-                      <ChangePill change={p.change} />
-                    </View>
-                    <ThemedText type="smallBold">{itemName(p.item)}</ThemedText>
-                    <ThemedText type="caption" themeColor={p.reason_title ? 'tintText' : 'textSecondary'}>
-                      {p.reason_title ?? `${changeLabel(p.change)} vs 12-month avg`}
-                    </ThemedText>
-                  </Card>
-                </Pressable>
-              ))}
+              {moving.slice(0, 2).map((p) => {
+                // Tinted by direction so the movers stand out: red when pricier, green when cheaper.
+                const up = p.change > 0;
+                const fg = up ? 'danger' : 'fresh';
+                return (
+                  <Pressable key={p.item} onPress={() => setWhy(p.item)} style={{ flex: 1 }} accessibilityRole="button">
+                    <Card tone={up ? 'dangerSoft' : 'freshSoft'} style={{ gap: Spacing.one }}>
+                      <View style={styles.between}>
+                        <View style={[styles.icon, { backgroundColor: theme.backgroundElement }]}>
+                          <ItemIcon name={p.item} size={20} />
+                        </View>
+                        <Pill label={`${up ? '↑' : '↓'} ${changeLabel(p.change)}`} tone={{ fg, bg: 'backgroundElement' }} />
+                      </View>
+                      <ThemedText type="smallBold">{itemName(p.item)}</ThemedText>
+                      <ThemedText type="caption" themeColor={fg}>
+                        {up ? 'Pricier' : 'Cheaper'} than its 12-month average
+                      </ThemedText>
+                    </Card>
+                  </Pressable>
+                );
+              })}
             </View>
           </View>
         )}
@@ -105,7 +102,7 @@ export default function MarketPricesScreen() {
                   </View>
                   <ThemedText
                     type="label"
-                    themeColor={Math.abs(p.change) < NOTABLE_CHANGE ? 'textSecondary' : pct > 0 ? 'danger' : 'fresh'}>
+                    themeColor={pct > 0 ? 'danger' : pct < 0 ? 'fresh' : 'textSecondary'}>
                     {pct > 0 ? '↑ ' : pct < 0 ? '↓ ' : '— '}
                     {changeLabel(p.change)}
                   </ThemedText>
@@ -133,7 +130,6 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three - 4, paddingHorizontal: Spacing.three + 4, paddingVertical: Spacing.two },
   round: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   content: { padding: Spacing.three + 4, gap: Spacing.three },
-  offline: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two + 2 },
   movingRow: { flexDirection: 'row', gap: Spacing.two },
   between: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   row: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three - 4, paddingVertical: Spacing.two + 2 },

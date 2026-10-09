@@ -1,0 +1,147 @@
+{
+  "_note": "SAMPLE prices in PHP, not sourced: replace with the real NCR seasonal table. low/high per unit; piece_qty converts one piece to the unit (e.g. one bangus is about 0.5 kg). trend 'up' + reason feeds Price watch (UC-4.2).",
+  "region": "NCR",
+  "as_of": "2026-10",
+  "items": {
+    "bangus": {
+      "unit": "kg",
+      "low": 180,
+      "high": 220,
+      "piece_qty": 0.5
+    },
+    "tilapia": {
+      "unit": "kg",
+      "low": 120,
+      "high": 150,
+      "piece_qty": 0.4
+    },
+    "galunggong": {
+      "unit": "kg",
+      "low": 200,
+      "high": 260,
+      "piece_qty": 0.1
+    },
+    "pork": {
+      "unit": "kg",
+      "low": 320,
+      "high": 380,
+      "piece_qty": 0.5
+    },
+    "chicken": {
+      "unit": "kg",
+      "low": 190,
+      "high": 230,
+      "piece_qty": 1
+    },
+    "kangkong": {
+      "unit": "bundle",
+      "low": 15,
+      "high": 25,
+      "piece_qty": 1
+    },
+    "tomato": {
+      "unit": "kg",
+      "low": 60,
+      "high": 90,
+      "piece_qty": 0.1
+    },
+    "onion": {
+      "unit": "kg",
+      "low": 140,
+      "high": 180,
+      "piece_qty": 0.1,
+      "trend": "up",
+      "reason": "Heavy rains cut supply."
+    },
+    "garlic": {
+      "unit": "kg",
+      "low": 120,
+      "high": 160,
+      "piece_qty": 0.05
+    },
+    "ginger": {
+      "unit": "kg",
+      "low": 120,
+      "high": 160,
+      "piece_qty": 0.05
+    },
+    "banana": {
+      "unit": "kg",
+      "low": 60,
+      "high": 80,
+      "piece_qty": 0.15
+    },
+    "egg": {
+      "unit": "pc",
+      "low": 8,
+      "high": 9,
+      "piece_qty": 1
+    },
+    "sampalok mix": {
+      "unit": "pack",
+      "low": 20,
+      "high": 25,
+      "piece_qty": 1
+    },
+    "radish": {
+      "unit": "kg",
+      "low": 50,
+      "high": 70,
+      "piece_qty": 0.3
+    },
+    "sitaw": {
+      "unit": "bundle",
+      "low": 20,
+      "high": 30,
+      "piece_qty": 1
+    },
+    "papaya": {
+      "unit": "kg",
+      "low": 40,
+      "high": 60,
+      "piece_qty": 0.8
+    },
+    "malunggay": {
+      "unit": "bundle",
+      "low": 10,
+      "high": 15,
+      "piece_qty": 1
+    },
+    "soy sauce": {
+      "unit": "bottle",
+      "low": 25,
+      "high": 30,
+      "piece_qty": 1
+    },
+    "vinegar": {
+      "unit": "bottle",
+      "low": 20,
+      "high": 25,
+      "piece_qty": 1
+    },
+    "siling haba": {
+      "unit": "kg",
+      "low": 200,
+      "high": 260,
+      "piece_qty": 0.01
+    },
+    "patis": {
+      "unit": "bottle",
+      "low": 30,
+      "high": 40,
+      "piece_qty": 1
+    },
+    "kalamansi": {
+      "unit": "kg",
+      "low": 80,
+      "high": 120,
+      "piece_qty": 0.02
+    },
+    "lumpia wrapper": {
+      "unit": "pack",
+      "low": 30,
+      "high": 40,
+      "piece_qty": 1
+    }
+  }
+}

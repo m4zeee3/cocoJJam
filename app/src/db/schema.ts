@@ -1,0 +1,77 @@
+import type { SQLiteDatabase } from 'expo-sqlite';
+
+// Every synced table carries the same sync columns, matching backend/README.md:
+//   id          UUID made on the phone
+//   owner_id    null for guests
+//   updated_at  edit time in ms; the newer edit wins
+//   deleted     soft delete, never a hard DELETE
+//   dirty       1 = changed since the last push
+const SYNC_COLUMNS = `
+  id TEXT PRIMARY KEY NOT NULL,
+  owner_id TEXT,
+  updated_at INTEGER NOT NULL,
+  deleted INTEGER NOT NULL DEFAULT 0,
+  dirty INTEGER NOT NULL DEFAULT 1`;
+
+// Append new migrations to the end; never edit one that has shipped.
+const MIGRATIONS: string[] = [
+  `
+  CREATE TABLE pantry_items (${SYNC_COLUMNS},
+    name TEXT NOT NULL,
+    category TEXT,
+    quantity REAL NOT NULL DEFAULT 1,
+    unit TEXT NOT NULL DEFAULT 'pc',
+    storage TEXT NOT NULL,            -- ref | freezer | counter
+    stage TEXT NOT NULL,              -- fresh | good | use_soon | spoiled
+    confidence TEXT NOT NULL,         -- high | medium | low
+    date_added TEXT NOT NULL,         -- ISO date
+    cook_by TEXT NOT NULL,            -- ISO date
+    rescan_tomorrow INTEGER NOT NULL DEFAULT 0,
+    thumbnail_uri TEXT,
+    paid_price_php REAL,              -- set by Palengke Mode
+    status TEXT NOT NULL DEFAULT 'active'  -- active | used | wasted
+  );
+  CREATE INDEX pantry_active ON pantry_items (status, deleted, cook_by);
+
+  CREATE TABLE scan_history (${SYNC_COLUMNS},
+    title TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    messages_json TEXT NOT NULL
+  );
+
+  CREATE TABLE bookmarks (${SYNC_COLUMNS},
+    recipe_id TEXT NOT NULL
+  );
+
+  CREATE TABLE profiles (${SYNC_COLUMNS},
+    diet TEXT NOT NULL DEFAULT 'none',
+    allergies_json TEXT NOT NULL DEFAULT '[]',
+    household_size INTEGER NOT NULL DEFAULT 4,
+    weekly_budget_php REAL
+  );
+
+  -- Local-only key/value store: sync cursor, signed-in session, flags.
+  CREATE TABLE app_state (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+  `,
+  // 2: keep the purchase answer so storage/date edits can recompute cook-by (UC-2.3, 2.8),
+  // and count scans for the item detail's Scan history (UC-2.4).
+  `
+  ALTER TABLE pantry_items ADD COLUMN purchase TEXT NOT NULL DEFAULT 'today';
+  ALTER TABLE pantry_items ADD COLUMN scan_count INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE pantry_items ADD COLUMN added_at INTEGER NOT NULL DEFAULT 0;
+  UPDATE pantry_items SET added_at = updated_at WHERE added_at = 0;
+  `,
+];
+
+export async function migrate(db: SQLiteDatabase) {
+  await db.execAsync('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+  const row = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
+  let version = row?.user_version ?? 0;
+  while (version < MIGRATIONS.length) {
+    await db.withTransactionAsync(async () => {
+      await db.execAsync(MIGRATIONS[version]);
+      await db.execAsync(`PRAGMA user_version = ${version + 1}`);
+    });
+    version++;
+  }
+}

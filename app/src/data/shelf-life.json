@@ -1,0 +1,11 @@
+{
+  "_note": "Days a FRESH item keeps from purchase, as [min, max], per storage. Keys must match the item part of the model labels. Sample values: replace with sourced numbers.",
+  "default": { "ref": [2, 4], "freezer": [30, 90], "counter": [1, 2] },
+  "tilapia": { "ref": [1, 2], "freezer": [90, 180], "counter": [0, 0] },
+  "bangus": { "ref": [1, 2], "freezer": [90, 180], "counter": [0, 0] },
+  "pork": { "ref": [3, 5], "freezer": [120, 180], "counter": [0, 0] },
+  "chicken": { "ref": [1, 2], "freezer": [270, 365], "counter": [0, 0] },
+  "banana": { "ref": [5, 7], "freezer": [60, 90], "counter": [2, 5] },
+  "tomato": { "ref": [7, 10], "freezer": [60, 90], "counter": [3, 5] },
+  "kangkong": { "ref": [2, 3], "freezer": [30, 60], "counter": [0, 1] }
+}

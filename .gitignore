@@ -1,0 +1,6 @@
+# Secrets, in any folder
+.env
+.env.*
+!.env.example
+
+.DS_Store

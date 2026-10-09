@@ -1,0 +1,184 @@
+{
+  "_note": "SAMPLE recipes: replace or extend. Amounts are for `servings`. `unit` is what the cook sees (pc, bundle, pack, kg, g, tbsp, cup); cost converts it with the price table (pc uses piece_qty, g uses kg). `cost_qty` overrides that conversion in the price table's unit. Leave out salt, oil and water.",
+  "recipes": [
+    {
+      "id": "sinigang-na-bangus",
+      "title": "Sinigang na Bangus",
+      "description": "Sour tamarind soup with milkfish and vegetables. A comforting way to use your bangus and kangkong before they spoil.",
+      "minutes": 45,
+      "servings": 4,
+      "ingredients": [
+        { "item": "bangus", "qty": 2, "unit": "pc", "prep": "sliced" },
+        { "item": "kangkong", "qty": 1, "unit": "bundle" },
+        { "item": "tomato", "qty": 3, "unit": "pc", "prep": "quartered" },
+        { "item": "onion", "qty": 1, "unit": "pc", "prep": "sliced" },
+        { "item": "radish", "qty": 1, "unit": "pc" },
+        { "item": "sitaw", "qty": 1, "unit": "bundle" },
+        { "item": "sampalok mix", "qty": 1, "unit": "pack" },
+        { "item": "siling haba", "qty": 2, "unit": "pc" }
+      ],
+      "directions": [
+        "Boil 8 cups of water with the tomatoes and onion for 10 minutes.",
+        "Add the radish and sampalok mix. Simmer for 5 minutes.",
+        "Add the bangus and siling haba. Cook on low heat for 8–10 minutes.",
+        "Add the sitaw, then the kangkong in the last 2 minutes. Season with patis."
+      ]
+    },
+    {
+      "id": "paksiw-na-bangus",
+      "title": "Paksiw na Bangus",
+      "description": "Milkfish simmered in vinegar, ginger and garlic. Keeps well for the next day.",
+      "minutes": 35,
+      "servings": 4,
+      "ingredients": [
+        { "item": "bangus", "qty": 2, "unit": "pc", "prep": "sliced" },
+        { "item": "vinegar", "qty": 0.5, "unit": "cup", "cost_qty": 0.5 },
+        { "item": "ginger", "qty": 1, "unit": "pc", "prep": "sliced" },
+        { "item": "garlic", "qty": 1, "unit": "pc", "prep": "crushed" },
+        { "item": "onion", "qty": 1, "unit": "pc", "prep": "sliced" },
+        { "item": "siling haba", "qty": 2, "unit": "pc" }
+      ],
+      "directions": [
+        "Arrange the ginger, garlic and onion in a pot, then lay the bangus on top.",
+        "Pour in the vinegar and 1 cup of water. Add the siling haba.",
+        "Bring to a boil without stirring, then simmer for 20 minutes."
+      ]
+    },
+    {
+      "id": "ginisang-kangkong",
+      "title": "Ginisang Kangkong",
+      "description": "Kangkong sautéed with garlic, onion and tomato. Ready in 15 minutes.",
+      "minutes": 15,
+      "servings": 3,
+      "ingredients": [
+        { "item": "kangkong", "qty": 2, "unit": "bundle" },
+        { "item": "garlic", "qty": 1, "unit": "pc", "prep": "minced" },
+        { "item": "onion", "qty": 1, "unit": "pc", "prep": "sliced" },
+        { "item": "tomato", "qty": 2, "unit": "pc", "prep": "chopped" },
+        { "item": "patis", "qty": 1, "unit": "tbsp", "cost_qty": 0.05 }
+      ],
+      "directions": [
+        "Sauté the garlic, onion and tomato until soft.",
+        "Add the kangkong stems first, then the leaves.",
+        "Season with patis and cook for 2 more minutes."
+      ]
+    },
+    {
+      "id": "daing-na-bangus",
+      "title": "Daing na Bangus",
+      "description": "Butterflied milkfish marinated in vinegar and garlic, then fried until crisp.",
+      "minutes": 25,
+      "servings": 3,
+      "ingredients": [
+        { "item": "bangus", "qty": 1, "unit": "pc", "prep": "butterflied" },
+        { "item": "vinegar", "qty": 0.5, "unit": "cup", "cost_qty": 0.5 },
+        { "item": "garlic", "qty": 1, "unit": "pc", "prep": "crushed" }
+      ],
+      "directions": [
+        "Marinate the bangus in vinegar, garlic, salt and pepper for at least 15 minutes.",
+        "Pat dry, then fry skin side down until golden, about 5 minutes per side."
+      ]
+    },
+    {
+      "id": "ensaladang-kamatis",
+      "title": "Ensaladang Kamatis",
+      "description": "Fresh tomato and onion salad that rescues tomatoes on their last day.",
+      "minutes": 10,
+      "servings": 3,
+      "ingredients": [
+        { "item": "tomato", "qty": 4, "unit": "pc", "prep": "diced" },
+        { "item": "onion", "qty": 1, "unit": "pc", "prep": "diced" },
+        { "item": "kalamansi", "qty": 4, "unit": "pc" },
+        { "item": "patis", "qty": 1, "unit": "tbsp", "cost_qty": 0.05 }
+      ],
+      "directions": [
+        "Toss the tomatoes and onion in a bowl.",
+        "Squeeze in the kalamansi, add the patis, and mix. Serve right away."
+      ]
+    },
+    {
+      "id": "tinolang-manok",
+      "title": "Tinolang Manok",
+      "description": "Ginger chicken soup with green papaya and malunggay.",
+      "minutes": 50,
+      "servings": 4,
+      "ingredients": [
+        { "item": "chicken", "qty": 1, "unit": "kg", "prep": "cut up" },
+        { "item": "ginger", "qty": 1, "unit": "pc", "prep": "sliced" },
+        { "item": "onion", "qty": 1, "unit": "pc", "prep": "sliced" },
+        { "item": "papaya", "qty": 1, "unit": "pc", "prep": "wedged" },
+        { "item": "malunggay", "qty": 1, "unit": "bundle" },
+        { "item": "patis", "qty": 2, "unit": "tbsp", "cost_qty": 0.1 }
+      ],
+      "directions": [
+        "Sauté the ginger and onion, then add the chicken and brown lightly.",
+        "Season with patis, add 6 cups of water and simmer for 25 minutes.",
+        "Add the papaya and cook until tender, then the malunggay in the last minute."
+      ]
+    },
+    {
+      "id": "pork-adobo",
+      "title": "Pork Adobo",
+      "description": "Classic pork braised in soy sauce, vinegar and garlic.",
+      "minutes": 60,
+      "servings": 4,
+      "ingredients": [
+        { "item": "pork", "qty": 750, "unit": "g", "prep": "cubed" },
+        { "item": "garlic", "qty": 1, "unit": "pc", "prep": "crushed" },
+        { "item": "soy sauce", "qty": 0.5, "unit": "cup", "cost_qty": 0.5 },
+        { "item": "vinegar", "qty": 0.5, "unit": "cup", "cost_qty": 0.5 },
+        { "item": "onion", "qty": 1, "unit": "pc", "prep": "sliced" }
+      ],
+      "directions": [
+        "Combine everything with 1 cup of water and bring to a boil.",
+        "Simmer covered for 40 minutes, then uncover and reduce until glossy."
+      ]
+    },
+    {
+      "id": "tortang-kamatis",
+      "title": "Tortang Kamatis",
+      "description": "Soft tomato omelette, a quick way to use up tomatoes.",
+      "minutes": 15,
+      "servings": 2,
+      "ingredients": [
+        { "item": "tomato", "qty": 3, "unit": "pc", "prep": "chopped" },
+        { "item": "egg", "qty": 3, "unit": "pc" },
+        { "item": "onion", "qty": 0.5, "unit": "pc", "prep": "chopped" }
+      ],
+      "directions": [
+        "Sauté the onion and tomatoes until soft, then let cool slightly.",
+        "Beat the eggs, mix in the tomatoes, and cook in a pan until set."
+      ]
+    },
+    {
+      "id": "pritong-tilapia",
+      "title": "Pritong Tilapia",
+      "description": "Crispy fried tilapia, best with ensaladang kamatis on the side.",
+      "minutes": 25,
+      "servings": 3,
+      "ingredients": [
+        { "item": "tilapia", "qty": 2, "unit": "pc", "prep": "cleaned" },
+        { "item": "kalamansi", "qty": 3, "unit": "pc" }
+      ],
+      "directions": [
+        "Score the tilapia, rub with salt, and pat dry.",
+        "Fry in hot oil until crisp, about 6 minutes per side. Serve with kalamansi."
+      ]
+    },
+    {
+      "id": "banana-turon",
+      "title": "Turon",
+      "description": "Banana spring rolls with caramelized sugar, for bananas getting too ripe.",
+      "minutes": 20,
+      "servings": 4,
+      "ingredients": [
+        { "item": "banana", "qty": 4, "unit": "pc", "prep": "halved" },
+        { "item": "lumpia wrapper", "qty": 1, "unit": "pack" }
+      ],
+      "directions": [
+        "Roll each banana half in brown sugar, then in a lumpia wrapper.",
+        "Fry until golden, sprinkling more sugar into the oil to caramelize."
+      ]
+    }
+  ]
+}

@@ -30,8 +30,7 @@ import type { Stage } from '@/domain/types';
 import { useTheme } from '@/hooks/use-theme';
 import { pickPhoto } from '@/lib/open-scanner';
 import { FISH_SPECIES, isGenericFish } from '@/domain/fish';
-import { classify, DEMO_MODE, type Guess } from '@/ml/classifier';
-import { viewNote } from '@/ml/labels';
+import { classify, CONFIDENCE_THRESHOLD, DEMO_MODE, describeGuess, type Guess } from '@/ml/classifier';
 
 const UNITS: { value: VendorUnit; label: string }[] = (Object.keys(VENDOR_UNIT_LABEL) as VendorUnit[]).map((value) => ({
   value,
@@ -75,18 +74,25 @@ function Check({ photo }: { photo: string }) {
     classify(photo).then(
       (top) => {
         setGuesses(top);
-        if (top[0] && top[0].confidence >= 0.5) choose(top[0].item, top[0].stage, viewNote(top[0]));
+        if (top[0] && top[0].confidence >= CONFIDENCE_THRESHOLD) choose(top[0]);
         else setPhase('pickItem');
       },
       (e: Error) => setError(e.message),
     );
   }, [photo]);
 
-  function choose(name: string, s: Stage | null, n?: string | null) {
+  function choose(g: Guess) {
+    const name = g.item;
     setItem(name);
-    // The placeholder model has no stages yet, so assume Good.
-    setStage(s ?? 'good');
-    setNote(n ?? null);
+    // Non-fresh fish (eye/gill) isn't a spoilage verdict (see assets/model/README.md), so judge it
+    // cautiously as "use soon": never a "good buy", and the note asks for a smell and texture check.
+    const nonFreshFish = g.item === 'fish' && g.finding === 'non-fresh';
+    setStage(nonFreshFish ? 'use_soon' : (g.stage ?? 'good'));
+    setNote(
+      nonFreshFish
+        ? `Model: ${describeGuess(g)}. Not a spoilage check: smell it and press the flesh before buying.`
+        : `Model: ${describeGuess(g)} · ${Math.round(g.confidence * 100)}%`,
+    );
     // The model can't tell fish species apart; the reference price needs it.
     if (isGenericFish(name)) return setPhase('species');
     setPhase('price');
@@ -156,9 +162,11 @@ function Check({ photo }: { photo: string }) {
               Which item is this?
             </ThemedText>
             {guesses.map((g) => (
-              <Pressable key={g.label} onPress={() => choose(g.item, g.stage, viewNote(g))} style={styles.radioRow}>
+              <Pressable key={g.label} onPress={() => choose(g)} style={styles.radioRow}>
                 <Ionicons name="radio-button-off" size={18} color={theme.textSecondary} />
-                <ThemedText type="smallBold">{capitalize(g.item)}</ThemedText>
+                <ThemedText type="smallBold">
+                  {describeGuess(g)} · {Math.round(g.confidence * 100)}%
+                </ThemedText>
               </Pressable>
             ))}
           </Card>

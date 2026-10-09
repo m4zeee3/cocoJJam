@@ -4,3 +4,23 @@
 !.env.example
 
 .DS_Store
+
+# AI training environment
+ai-training/.venv/
+ai-training/__pycache__/
+ai-training/**/__pycache__/
+
+# Large training datasets
+ai-training/training_datasets/
+
+# Model artifacts and checkpoints
+ai-training/models/
+
+# Generated reports
+ai-training/reports/
+
+# Python cache
+*.pyc
+
+# Notebook checkpoints
+.ipynb_checkpoints/

@@ -1,0 +1,32 @@
+{
+  "input_shape": [
+    1,
+    224,
+    224,
+    3
+  ],
+  "input_dtype": "float32",
+  "input_color": "RGB",
+  "input_range": [
+    0,
+    255
+  ],
+  "resize": "bilinear stretch",
+  "labels": [
+    "beef/fresh",
+    "beef/spoiled",
+    "chicken/fresh",
+    "chicken/spoiled",
+    "fish/eye-fresh",
+    "fish/eye-non-fresh",
+    "fish/gill-fresh",
+    "fish/gill-non-fresh",
+    "pork/fresh",
+    "pork/spoiled"
+  ],
+  "temperature": 0.9713647183175376,
+  "confidence_threshold": 0.6179890036582947,
+  "output": "calibrated class probabilities, in labels.json order",
+  "source_model_sha256": "2f82fa116f1e3e04dcefb9451dce86ef8611774111ee046c69b229981e5ccf9b",
+  "tflite_model_sha256": "f34aabfbf6f26d01ba3584ae8029f5e223a76f207ef309c750a7d86bd3a366af"
+}

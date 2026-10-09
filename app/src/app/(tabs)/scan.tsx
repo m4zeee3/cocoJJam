@@ -199,7 +199,15 @@ function ScanChat({ initialPhoto }: { initialPhoto?: string }) {
       paid_price_php: null,
     });
     if (asWasted) await setPantryStatus(db, id, 'wasted');
-    await addScan(db, [{ name: scan.item, stage: scan.stage }]);
+    await addScan(db, [
+      {
+        name: scan.item,
+        stage: scan.stage,
+        photo: scan.photo,
+        daysLeft: estimate.daysLeft,
+        outcome: asWasted ? 'wasted' : 'pantry',
+      },
+    ]);
     if (asWasted) {
       say({ kind: 'user', text: 'Log as wasted' }, { kind: 'bot', text: 'Logged as wasted. Salamat sa pag-check!' });
       setStep('done');

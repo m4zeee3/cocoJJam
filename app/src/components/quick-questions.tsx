@@ -3,78 +3,101 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Button } from '@/components/button';
-import { ChoicePills, Sheet, Stepper } from '@/components/controls';
+import { Sheet, Stepper } from '@/components/controls';
 import { ThemedText } from '@/components/themed-text';
 import { Radius, Spacing } from '@/constants/theme';
-import { ALLERGY_LABEL, DIET_LABEL, type Allergy, type Diet, type Profile } from '@/db/profile';
+import { ALLERGY_INFO, DIET_INFO, type Allergy, type Diet, type Profile } from '@/db/profile';
 import { useTheme } from '@/hooks/use-theme';
 
-const DIETS = (Object.keys(DIET_LABEL) as Diet[]).map((value) => ({ value, label: DIET_LABEL[value] }));
-const ALLERGIES = Object.keys(ALLERGY_LABEL) as Allergy[];
+/** Multi-select pills with a "None" pill that clears the rest. */
+function MultiPills<T extends string>({
+  options,
+  value,
+  onChange,
+}: {
+  options: { value: T; label: string }[];
+  value: T[];
+  onChange: (v: T[]) => void;
+}) {
+  const theme = useTheme();
+  const all: { value: T | null; label: string }[] = [{ value: null, label: 'None' }, ...options];
+  return (
+    <View style={styles.pills}>
+      {all.map((o) => {
+        const selected = o.value === null ? value.length === 0 : value.includes(o.value);
+        return (
+          <Pressable
+            key={o.value ?? 'none'}
+            onPress={() => {
+              if (o.value === null) return onChange([]);
+              const v = o.value;
+              onChange(value.includes(v) ? value.filter((x) => x !== v) : [...value, v]);
+            }}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: selected }}
+            style={[
+              styles.pill,
+              { borderColor: selected ? theme.tint : theme.backgroundSelected, backgroundColor: selected ? theme.highlight : theme.backgroundElement },
+            ]}>
+            {selected && o.value !== null && <Ionicons name="checkmark" size={12} color={theme.tintText} />}
+            <ThemedText type="label" themeColor={selected ? 'tintText' : 'text'}>
+              {o.label}
+            </ThemedText>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
 
-/** R02 (UC-3.1, 5.1): diet, allergies and servings before showing dishes. */
+/**
+ * R02 (UC-3.1, 5.1): diet, allergies and servings before showing dishes.
+ * `mealOnly` opens it as H07's one-time change (UC-5.3), unticked by default.
+ */
 export function QuickQuestions({
   visible,
   initial,
+  mealOnly = false,
   onClose,
   onSubmit,
 }: {
   visible: boolean;
   initial: Profile;
+  mealOnly?: boolean;
   onClose: () => void;
   onSubmit: (profile: Profile, save: boolean) => void;
 }) {
   const theme = useTheme();
-  const [diet, setDiet] = useState(initial.diet);
+  const [diets, setDiets] = useState<Diet[]>(initial.diets);
   const [allergies, setAllergies] = useState<Allergy[]>(initial.allergies);
   const [servings, setServings] = useState(initial.household_size);
-  const [save, setSave] = useState(true);
-
-  function toggle(a: Allergy | 'none') {
-    if (a === 'none') return setAllergies([]);
-    setAllergies((cur) => (cur.includes(a) ? cur.filter((x) => x !== a) : [...cur, a]));
-  }
+  const [save, setSave] = useState(!mealOnly);
 
   return (
     <Sheet visible={visible} onClose={onClose}>
       <View>
-        <ThemedText type="section">A few quick questions</ThemedText>
+        <ThemedText type="section">{mealOnly ? 'Change for this meal' : 'A few quick questions'}</ThemedText>
         <ThemedText type="small" themeColor="textSecondary">
-          So I only show dishes that fit your household.
+          {mealOnly ? 'Cooking for guests? Your saved profile stays as it is.' : 'So I only show dishes that fit your household.'}
         </ThemedText>
       </View>
 
       <View style={styles.group}>
         <ThemedText type="label">Dietary needs</ThemedText>
-        <ChoicePills options={DIETS} value={diet} onChange={setDiet} />
+        <MultiPills
+          options={(Object.keys(DIET_INFO) as Diet[]).map((d) => ({ value: d, label: DIET_INFO[d].label }))}
+          value={diets}
+          onChange={setDiets}
+        />
       </View>
 
       <View style={styles.group}>
         <ThemedText type="label">Allergies</ThemedText>
-        <View style={styles.pills}>
-          {(['none', ...ALLERGIES] as (Allergy | 'none')[]).map((a) => {
-            const selected = a === 'none' ? allergies.length === 0 : allergies.includes(a);
-            return (
-              <Pressable
-                key={a}
-                onPress={() => toggle(a)}
-                accessibilityRole="checkbox"
-                accessibilityState={{ checked: selected }}
-                style={[
-                  styles.pill,
-                  {
-                    borderColor: selected ? theme.tint : theme.backgroundSelected,
-                    backgroundColor: selected ? theme.highlight : theme.backgroundElement,
-                  },
-                ]}>
-                {selected && a !== 'none' && <Ionicons name="checkmark" size={12} color={theme.tintText} />}
-                <ThemedText type="label" themeColor={selected ? 'tintText' : 'text'}>
-                  {a === 'none' ? 'None' : ALLERGY_LABEL[a]}
-                </ThemedText>
-              </Pressable>
-            );
-          })}
-        </View>
+        <MultiPills
+          options={(Object.keys(ALLERGY_INFO) as Allergy[]).map((a) => ({ value: a, label: ALLERGY_INFO[a].label }))}
+          value={allergies}
+          onChange={setAllergies}
+        />
       </View>
 
       <View style={styles.servings}>
@@ -91,7 +114,7 @@ export function QuickQuestions({
         </ThemedText>
       </Pressable>
 
-      <Button title="Show dishes" onPress={() => onSubmit({ ...initial, diet, allergies, household_size: servings }, save)} />
+      <Button title="Show dishes" onPress={() => onSubmit({ ...initial, diets, allergies, household_size: servings }, save)} />
     </Sheet>
   );
 }
@@ -99,15 +122,7 @@ export function QuickQuestions({
 const styles = StyleSheet.create({
   group: { gap: Spacing.two },
   pills: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two },
-  pill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    borderWidth: 1,
-    borderRadius: Radius.pill,
-    paddingHorizontal: 14,
-    paddingVertical: Spacing.two,
-  },
+  pill: { flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderRadius: Radius.pill, paddingHorizontal: 14, paddingVertical: Spacing.two },
   servings: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   check: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two + 2 },
   box: { width: 20, height: 20, borderRadius: 5, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },

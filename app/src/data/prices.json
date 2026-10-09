@@ -1,7 +1,8 @@
 {
-  "_note": "SAMPLE prices in PHP, not sourced: replace with the real NCR seasonal table. low/high per unit; piece_qty converts one piece to the unit (e.g. one bangus is about 0.5 kg). trend 'up' + reason feeds Price watch (UC-4.2).",
+  "_note": "SAMPLE prices in PHP, not sourced: replace with the real NCR seasonal table. low/high per unit; piece_qty converts one piece to the unit (e.g. one bangus is about 0.5 kg). trend 'up' + reason feeds Price watch (UC-4.2). `variants` gives a cut its own range (UC-6.4); `updated` is the reference date shown in Palengke Mode.",
   "region": "NCR",
   "as_of": "2026-10",
+  "updated": "2026-10-07",
   "items": {
     "bangus": {
       "unit": "kg",
@@ -23,9 +24,29 @@
     },
     "pork": {
       "unit": "kg",
-      "low": 320,
+      "low": 290,
       "high": 380,
-      "piece_qty": 0.5
+      "piece_qty": 0.5,
+      "variants": {
+        "liempo": {
+          "label": "Liempo",
+          "sub": "Pork belly",
+          "low": 340,
+          "high": 380
+        },
+        "kasim": {
+          "label": "Kasim",
+          "sub": "Shoulder",
+          "low": 300,
+          "high": 340
+        },
+        "pigue": {
+          "label": "Pigue",
+          "sub": "Ham / leg",
+          "low": 290,
+          "high": 330
+        }
+      }
     },
     "chicken": {
       "unit": "kg",

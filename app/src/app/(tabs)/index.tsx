@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Image } from 'expo-image';
-import { router } from 'expo-router';
+import { Redirect, router } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
@@ -12,7 +12,7 @@ import { ThemedText } from '@/components/themed-text';
 import { Fonts, Spacing } from '@/constants/theme';
 import { listRecentScans, type ScanRecord } from '@/db/history';
 import { listActivePantry, type PantryItem } from '@/db/pantry';
-import { getProfile, type Profile } from '@/db/profile';
+import { getFlag, getProfile, setFlag, type Profile } from '@/db/profile';
 import { loadSamplePantry } from '@/db/sample';
 import { parseIsoDate, urgencyGroup } from '@/domain/cook-by';
 import { pantryValue, peso, priceMonth, priceWatch } from '@/domain/prices';
@@ -30,25 +30,69 @@ function greeting(now = new Date()) {
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 async function loadHome(db: Parameters<typeof listActivePantry>[0]) {
-  const [items, scans, profile] = await Promise.all([listActivePantry(db), listRecentScans(db, 2), getProfile(db)]);
-  return { items, scans, profile };
+  const [items, scans, profile, skipped] = await Promise.all([
+    listActivePantry(db),
+    listRecentScans(db, 2),
+    getProfile(db),
+    getFlag(db, 'household_setup_skipped'),
+  ]);
+  const firstLaunch = !(await getFlag(db, 'welcome_seen'));
+  return { items, scans, profile, offerSetup: !profile && !skipped, firstLaunch };
 }
 
 /** Home: Today dashboard. UC-12.1 first-time user, UC-12.2 returning user. */
 export default function HomeScreen() {
   const db = useSQLiteContext();
-  const [{ items, scans, profile }, reload] = useFocusQuery(loadHome, {
+  const theme = useTheme();
+  const [{ items, scans, profile, offerSetup, firstLaunch }, reload] = useFocusQuery(loadHome, {
     items: [] as PantryItem[],
     scans: [] as ScanRecord[],
     profile: null as Profile | null,
+    offerSetup: false,
+    firstLaunch: false,
   });
+
+  // 02 Welcome on first launch (UC-11.1).
+  if (firstLaunch) return <Redirect href="/welcome" />;
+
 
   return (
     <Screen>
-      <View style={{ gap: Spacing.two }}>
-        <ThemedText type="title">{greeting()}!</ThemedText>
-        <OnDeviceBadge />
+      <View style={styles.headerRow}>
+        <View style={{ flex: 1, gap: Spacing.two }}>
+          <ThemedText type="title">{greeting()}!</ThemedText>
+          <OnDeviceBadge />
+        </View>
+        <Pressable
+          onPress={() => router.push('/settings')}
+          accessibilityLabel="Account and settings"
+          hitSlop={8}
+          style={[styles.profileButton, { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected }]}>
+          <Ionicons name="person-outline" size={18} color={theme.text} />
+        </Pressable>
       </View>
+      {offerSetup && (
+        <Card style={styles.setupCard}>
+          <View style={[styles.scanIcon, { backgroundColor: theme.freshSoft }]}>
+            <Ionicons name="home-outline" size={16} color={theme.fresh} />
+          </View>
+          <View style={{ flex: 1, gap: 2 }}>
+            <ThemedText type="smallBold">Set up your household</ThemedText>
+            <ThemedText type="caption" themeColor="textSecondary">
+              30 seconds: diet, allergies, how many you cook for.
+            </ThemedText>
+          </View>
+          <View style={styles.setupActions}>
+            <Button title="Set up" size="small" onPress={() => router.push('/household/setup')} />
+            <Button
+              title="Skip"
+              size="small"
+              variant="secondary"
+              onPress={() => setFlag(db, 'household_setup_skipped', '1').then(reload)}
+            />
+          </View>
+        </Card>
+      )}
       <Today
         items={items}
         scans={scans}
@@ -140,7 +184,7 @@ function Today({
 
       {scans.length > 0 && (
         <View style={styles.section}>
-          <SectionHeader title="Recent scans" />
+          <SectionHeader title="Recent scans" link="View all" onPress={() => router.navigate('/library')} />
           <Card style={{ gap: 0, paddingVertical: Spacing.one }}>
             {scans.map((s, i) => (
               <RecentScanRow key={s.id} scan={s} divider={i > 0} />
@@ -288,7 +332,10 @@ function RecentScanRow({ scan, divider }: { scan: ScanRecord; divider: boolean }
     ? `Today, ${when.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`
     : when.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   return (
-    <View style={[styles.scanRow, divider && { borderTopWidth: 1, borderTopColor: theme.backgroundSelected }]}>
+    <Pressable
+      onPress={() => router.push({ pathname: '/scans/[id]', params: { id: scan.id } })}
+      accessibilityRole="button"
+      style={[styles.scanRow, divider && { borderTopWidth: 1, borderTopColor: theme.backgroundSelected }]}>
       <View style={[styles.scanIcon, { backgroundColor: theme.highlight }]}>
         <Ionicons name="scan" size={16} color={theme.tint} />
       </View>
@@ -303,7 +350,8 @@ function RecentScanRow({ scan, divider }: { scan: ScanRecord; divider: boolean }
           <Dot key={n} color={STAGE_COLOR[i.stage]} size={7} />
         ))}
       </View>
-    </View>
+      <Ionicons name="chevron-forward" size={16} color={theme.textSecondary} />
+    </Pressable>
   );
 }
 
@@ -352,6 +400,10 @@ function EmptyPantryCard({ onSample }: { onSample: () => void }) {
 
 const styles = StyleSheet.create({
   section: { gap: Spacing.three },
+  headerRow: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.three },
+  profileButton: { width: 40, height: 40, borderRadius: 20, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  setupCard: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: Spacing.three - 4 },
+  setupActions: { flexDirection: 'row', gap: Spacing.two, width: '100%' },
   summary: { padding: Spacing.four - 4, gap: Spacing.two },
   counts: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two, marginTop: Spacing.one },
   countChip: {

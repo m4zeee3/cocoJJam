@@ -61,6 +61,23 @@ const MIGRATIONS: string[] = [
   ALTER TABLE pantry_items ADD COLUMN added_at INTEGER NOT NULL DEFAULT 0;
   UPDATE pantry_items SET added_at = updated_at WHERE added_at = 0;
   `,
+  // 3: Palengke Mode checks, kept on the phone only (UC-6.1–6.7).
+  `
+  CREATE TABLE palengke_checks (
+    id TEXT PRIMARY KEY NOT NULL,
+    created_at INTEGER NOT NULL,
+    item TEXT NOT NULL,
+    cut TEXT,
+    stage TEXT NOT NULL,
+    price REAL NOT NULL,
+    unit TEXT NOT NULL,           -- kg | pc | tali | bundle
+    verdict TEXT NOT NULL,
+    stall TEXT NOT NULL,
+    photo_uri TEXT,
+    bought INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX palengke_by_day ON palengke_checks (created_at);
+  `,
 ];
 
 export async function migrate(db: SQLiteDatabase) {

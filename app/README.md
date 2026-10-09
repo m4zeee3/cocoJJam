@@ -17,6 +17,17 @@ No local toolchain? Build in the cloud instead: `npx eas-cli@latest build --prof
 
 After the first build, `npm start` is enough until you add another native package.
 
+## Sign-in and sync (optional)
+
+Guests can use everything. Google sign-in adds backup, sync and community bookmark counts.
+
+1. Start the backend (see [../backend/README.md](../backend/README.md)) with `--host 0.0.0.0`.
+2. Copy `.env.example` to `.env` and set `EXPO_PUBLIC_API_URL` to your laptop's LAN IP, e.g. `http://192.168.1.20:8000`. Restart `npm start` after changing it.
+3. Google sign-in needs a dev build, so it won't work in Expo Go. After changing native config, run `npx expo prebuild --clean` once.
+4. Your Google account must be listed as a test user on the OAuth consent screen.
+
+OAuth client IDs are in `src/constants/config.ts`. The Android client is tied to package `com.cocojjam.app` plus the debug keystore's SHA-1. An EAS build needs its own SHA-1 added in Google Cloud.
+
 ## Where things are
 
 | Path | What |
@@ -26,7 +37,8 @@ After the first build, `npm start` is enough until you add another native packag
 | `assets/model/` | `model.tflite` + `labels.json` (placeholder now; see its README) |
 | `src/db/` | SQLite schema and migrations, pantry queries |
 | `src/domain/` | Cook-by estimate and urgency groups |
-| `src/data/` | Bundled tables: shelf life (prices and recipes go here too) |
+| `src/data/` | Bundled tables: shelf life, prices, recipes |
+| `src/sync/` | Google sign-in, push/pull sync with the backend, guest-data merge |
 
 ## Checks
 

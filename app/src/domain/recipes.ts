@@ -30,7 +30,6 @@ const TAGS: Record<string, Tag[]> = {
 };
 
 const DIET_EXCLUDES: Record<Diet, Tag[]> = {
-  none: [],
   no_pork: ['pork'],
   halal: ['pork'],
   vegetarian: ['meat', 'fish', 'shellfish'],
@@ -41,17 +40,23 @@ const ALLERGY_EXCLUDES: Record<Allergy, Tag[]> = {
   fish: ['fish'],
   peanuts: ['peanuts'],
   egg: ['egg'],
-  other: [],
 };
 
 /** A restriction the user can relax for one meal (R08). */
-export type Restriction = { kind: 'diet'; value: Diet } | { kind: 'allergy'; value: Allergy };
+export type Restriction =
+  | { kind: 'diet'; value: Diet }
+  | { kind: 'allergy'; value: Allergy }
+  | { kind: 'other'; value: string };
 
 function blockedBy(recipe: Recipe, profile: Profile): Restriction[] {
   const tags = new Set(recipe.ingredients.flatMap((i) => TAGS[i.item] ?? []));
   const out: Restriction[] = [];
-  if (DIET_EXCLUDES[profile.diet].some((t) => tags.has(t))) out.push({ kind: 'diet', value: profile.diet });
+  for (const d of profile.diets) if (DIET_EXCLUDES[d].some((t) => tags.has(t))) out.push({ kind: 'diet', value: d });
   for (const a of profile.allergies) if (ALLERGY_EXCLUDES[a].some((t) => tags.has(t))) out.push({ kind: 'allergy', value: a });
+  // Typed-in allergies match ingredient names ("mango" hides anything with mango).
+  for (const o of profile.otherAllergies) {
+    if (recipe.ingredients.some((i) => i.item.includes(o) || o.includes(i.item))) out.push({ kind: 'other', value: o });
+  }
   return out;
 }
 
@@ -154,7 +159,7 @@ export function getRecipe(id: string) {
   return RECIPES.find((r) => r.id === id) ?? null;
 }
 
-export const DEFAULT_PROFILE: Profile = { diet: 'none', allergies: [], household_size: 4, weekly_budget_php: null };
+export const DEFAULT_PROFILE: Profile = { diets: [], allergies: [], otherAllergies: [], household_size: 4, weekly_budget_php: null };
 
 export type Recommendation = {
   matches: RecipeView[];
@@ -192,9 +197,9 @@ export function recommend(pantry: PantryItem[], profile: Profile, focus?: string
 
 /** Drop one restriction from a profile for this meal only (UC-3.6). */
 export function relaxProfile(profile: Profile, r: Restriction): Profile {
-  return r.kind === 'diet'
-    ? { ...profile, diet: 'none' }
-    : { ...profile, allergies: profile.allergies.filter((a) => a !== r.value) };
+  if (r.kind === 'diet') return { ...profile, diets: profile.diets.filter((d) => d !== r.value) };
+  if (r.kind === 'allergy') return { ...profile, allergies: profile.allergies.filter((a) => a !== r.value) };
+  return { ...profile, otherAllergies: profile.otherAllergies.filter((o) => o !== r.value) };
 }
 
 /** R08 "Or cook it simply": plain methods for the most urgent item. */

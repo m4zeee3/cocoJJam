@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSQLiteContext, type SQLiteDatabase } from 'expo-sqlite';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -20,6 +20,8 @@ import { getRecipe, viewRecipe, type Line } from '@/domain/recipes';
 import { useFocusQuery } from '@/hooks/use-pantry';
 import { useTheme } from '@/hooks/use-theme';
 import { getMealProfile } from '@/lib/meal-profile';
+import { api, apiConfigured } from '@/sync/api';
+import { getSession } from '@/sync/session';
 
 const MEAT_OR_FISH = new Set(['bangus', 'tilapia', 'galunggong', 'pork', 'chicken', 'beef']);
 
@@ -30,12 +32,17 @@ export default function RecipeDetailScreen() {
   const theme = useTheme();
   const load = useCallback(
     async (db: SQLiteDatabase) => {
-      const [pantry, profile, saved] = await Promise.all([listActivePantry(db), getProfile(db), isBookmarked(db, id)]);
-      return { pantry, profile, saved };
+      const [pantry, profile, saved, session] = await Promise.all([
+        listActivePantry(db),
+        getProfile(db),
+        isBookmarked(db, id),
+        getSession(db),
+      ]);
+      return { pantry, profile, saved, signedIn: !!session };
     },
     [id],
   );
-  const [data] = useFocusQuery(load, null as { pantry: PantryItem[]; profile: Profile | null; saved: boolean } | null);
+  const [data] = useFocusQuery(load, null as { pantry: PantryItem[]; profile: Profile | null; saved: boolean; signedIn: boolean } | null);
 
   if (!recipe) {
     return (
@@ -49,7 +56,17 @@ export default function RecipeDetailScreen() {
 
   const profile = getMealProfile() ?? data.profile;
   const start = Number(servingsParam) || profile?.household_size || recipe.servings;
-  return <Detail key={recipe.id} recipeId={recipe.id} pantry={data.pantry} profile={profile} initialServings={start} initiallySaved={data.saved} />;
+  return (
+    <Detail
+      key={recipe.id}
+      recipeId={recipe.id}
+      pantry={data.pantry}
+      profile={profile}
+      initialServings={start}
+      initiallySaved={data.saved}
+      signedIn={data.signedIn}
+    />
+  );
 }
 
 function Detail({
@@ -58,12 +75,14 @@ function Detail({
   profile,
   initialServings,
   initiallySaved,
+  signedIn,
 }: {
   recipeId: string;
   pantry: PantryItem[];
   profile: Profile | null;
   initialServings: number;
   initiallySaved: boolean;
+  signedIn: boolean;
 }) {
   const db = useSQLiteContext();
   const theme = useTheme();
@@ -73,6 +92,15 @@ function Detail({
   const [saved, setSaved] = useState(initiallySaved);
   const [toast, setToast] = useState<string | null>(null);
   const hideToast = useCallback(() => setToast(null), []);
+  // Community bookmark count (UC-3.5), when the sync server is reachable.
+  const [community, setCommunity] = useState<number | null>(null);
+  useEffect(() => {
+    if (!apiConfigured()) return;
+    api<Record<string, number>>(`/recipes/counts?ids=${encodeURIComponent(recipeId)}`).then(
+      (counts) => setCommunity(counts[recipeId] ?? 0),
+      () => {},
+    );
+  }, [recipeId]);
 
   const view = viewRecipe(recipe, pantry, servings);
   const base = viewRecipe(recipe, pantry, recipe.servings);
@@ -85,8 +113,15 @@ function Detail({
   async function bookmark() {
     const next = await toggleBookmark(db, recipe.id);
     setSaved(next);
-    // Guests keep bookmarks on the phone; the community count needs sign-in (UC-3.5, 11.x).
-    setToast(next ? 'Saved to Library. Sign in to add your bookmark to the community count.' : 'Removed from Library.');
+    // Guests keep bookmarks on the phone; signed-in bookmarks also count toward the community total (R06/R07).
+    if (signedIn && community != null) setCommunity(community + (next ? 1 : -1));
+    setToast(
+      next
+        ? signedIn
+          ? 'Saved to Library and added to the count. Syncs when you’re online.'
+          : 'Saved to Library. Sign in to add your bookmark to the community count.'
+        : 'Removed from Library.',
+    );
   }
 
   return (
@@ -109,7 +144,11 @@ function Detail({
             <View style={styles.meta}>
               <Meta icon="time-outline" text={`${recipe.minutes} min`} />
               <Meta icon="people-outline" text={`${recipe.servings} servings`} />
-              {saved && <Meta icon="bookmark" text="Saved" />}
+              {community != null && community > 0 ? (
+                <Meta icon="bookmark-outline" text={`${community} bookmarked`} />
+              ) : saved ? (
+                <Meta icon="bookmark" text="Saved" />
+              ) : null}
             </View>
             {view.uses.length > 0 && (
               <Pill

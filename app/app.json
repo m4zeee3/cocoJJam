@@ -44,7 +44,13 @@
           "photosPermission": "cocoJJAM reads photos you pick to check how fresh your food is. Photos stay on your phone."
         }
       ],
-      "expo-notifications"
+      "expo-notifications",
+      [
+        "@react-native-google-signin/google-signin",
+        {
+          "iosUrlScheme": "com.googleusercontent.apps.1045250307755-iduldkk34c7ku5sp1pd80cmr4bbhm4qv"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

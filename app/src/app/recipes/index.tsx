@@ -13,7 +13,7 @@ import { QuickQuestions } from '@/components/quick-questions';
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
 import { listActivePantry, type PantryItem } from '@/db/pantry';
-import { ALLERGY_LABEL, getProfile, profileSummary, saveProfile, type Profile } from '@/db/profile';
+import { ALLERGY_INFO, getProfile, profileSummary, saveProfile, type Profile } from '@/db/profile';
 import { urgencyGroup } from '@/domain/cook-by';
 import { peso, priceMonth } from '@/domain/prices';
 import {
@@ -37,9 +37,9 @@ async function load(db: SQLiteDatabase) {
 }
 
 function relaxLabel(r: Restriction) {
-  if (r.kind === 'allergy') return `Allow ${ALLERGY_LABEL[r.value].toLowerCase()} this time`;
+  if (r.kind === 'allergy') return `Allow ${ALLERGY_INFO[r.value].label.toLowerCase()} this time`;
+  if (r.kind === 'other') return `Allow ${r.value} this time`;
   return {
-    none: '',
     no_pork: 'Allow pork this time',
     halal: 'Allow pork this time',
     vegetarian: 'Allow meat and fish this time',
@@ -54,7 +54,7 @@ export default function DishesScreen() {
   const theme = useTheme();
   const [data, reload] = useFocusQuery(load, null as { pantry: PantryItem[]; profile: Profile | null } | null);
   const [meal, setMeal] = useState<Profile | null>(getMealProfile());
-  const [asking, setAsking] = useState(false);
+  const [asking, setAsking] = useState<'profile' | 'meal' | null>(null);
 
   if (!data) return <SafeAreaView style={[styles.safe, { backgroundColor: theme.background }]} />;
 
@@ -63,7 +63,7 @@ export default function DishesScreen() {
   const { matches, relax } = recommend(data.pantry, active, focus);
   const urgent = data.pantry.filter((p) => urgencyGroup(p.cook_by) !== 'Fresh').slice(0, 3);
 
-  function applyMealProfile(p: Profile) {
+  function applyMealProfile(p: Profile | null) {
     setMealProfile(p);
     setMeal(p);
   }
@@ -75,11 +75,11 @@ export default function DishesScreen() {
         <ThemedText type="section" style={{ flex: 1 }}>
           Dishes for you
         </ThemedText>
-        <RoundButton icon="options-outline" label="Filters" onPress={() => setAsking(true)} />
+        <RoundButton icon="options-outline" label="Filters" onPress={() => setAsking('profile')} />
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
-        <Pressable onPress={() => setAsking(true)}>
+        <Pressable onPress={() => setAsking('profile')}>
           <Card style={styles.profileRow}>
             <Ionicons name="people-outline" size={16} color={theme.textSecondary} />
             <ThemedText type="small" style={{ flex: 1 }}>
@@ -90,6 +90,20 @@ export default function DishesScreen() {
             </ThemedText>
           </Card>
         </Pressable>
+
+        {meal && data.profile && (
+          <Card tone="highlight" style={styles.profileRow}>
+            <Ionicons name="time-outline" size={16} color={theme.tintText} />
+            <ThemedText type="caption" style={{ flex: 1 }}>
+              This meal only · {profileSummary(meal)}. Your saved profile stays as it is.
+            </ThemedText>
+            <Pressable onPress={() => applyMealProfile(null)} hitSlop={8}>
+              <ThemedText type="label" themeColor="tintText">
+                Undo
+              </ThemedText>
+            </Pressable>
+          </Card>
+        )}
 
         {(focus || urgent.length > 0) && (
           <View style={styles.usingFirst}>
@@ -118,6 +132,11 @@ export default function DishesScreen() {
             <ThemedText type="caption" themeColor="textSecondary" style={styles.center}>
               Prices are estimates for {active.household_size} servings at {priceMonth('long')} prices (NCR)
             </ThemedText>
+            {data.profile && !meal && (
+              <View style={{ alignSelf: 'center' }}>
+                <Button title="Change for this meal" size="small" variant="secondary" onPress={() => setAsking('meal')} />
+              </View>
+            )}
           </>
         ) : (
           <NoMatches
@@ -133,13 +152,14 @@ export default function DishesScreen() {
         <QuickQuestions
           visible
           initial={active}
+          mealOnly={asking === 'meal'}
           onClose={() => {
-            setAsking(false);
+            setAsking(null);
             // Closing the first-time questions still shows dishes, unfiltered.
             if (!profile) applyMealProfile(DEFAULT_PROFILE);
           }}
           onSubmit={async (p, save) => {
-            setAsking(false);
+            setAsking(null);
             if (save) {
               await saveProfile(db, p);
               setMealProfile(null);

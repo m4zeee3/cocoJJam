@@ -14,6 +14,7 @@ import { useEffect } from 'react';
 
 import { Colors } from '@/constants/theme';
 import { migrate } from '@/db/schema';
+import { AutoSync } from '@/sync/auto-sync';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -41,6 +42,7 @@ export default function RootLayout() {
     <ThemeProvider value={navTheme}>
       <StatusBar style="dark" />
       <SQLiteProvider databaseName="cocojjam.db" onInit={migrate}>
+        <AutoSync />
         <Stack screenOptions={{ headerShown: false }} />
       </SQLiteProvider>
     </ThemeProvider>

@@ -24,3 +24,14 @@ export async function toggleBookmark(db: SQLiteDatabase, recipeId: string): Prom
   await db.runAsync(`UPDATE bookmarks SET deleted = ?, updated_at = ?, dirty = 1 WHERE id = ?`, deleted, Date.now(), existing.id);
   return deleted === 0;
 }
+
+/** UC-7.2: saved recipes, most recently saved first. */
+export function listBookmarks(db: SQLiteDatabase) {
+  return db.getAllAsync<{ recipe_id: string; updated_at: number }>(
+    `SELECT recipe_id, MAX(updated_at) AS updated_at FROM bookmarks WHERE deleted = 0 GROUP BY recipe_id ORDER BY updated_at DESC`,
+  );
+}
+
+export async function removeBookmark(db: SQLiteDatabase, recipeId: string) {
+  await db.runAsync(`UPDATE bookmarks SET deleted = 1, updated_at = ?, dirty = 1 WHERE recipe_id = ? AND deleted = 0`, Date.now(), recipeId);
+}

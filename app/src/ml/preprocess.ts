@@ -2,22 +2,14 @@ import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import * as jpeg from 'jpeg-js';
 
 /**
- * Photo URI -> RGB bytes (0-255), center-cropped to a square and resized.
+ * Photo URI -> RGB bytes (0-255), bilinear-stretched to the model input size.
  * Expo has no raw-pixel API, so we re-encode a tiny JPEG and decode it in JS.
  */
 export async function imageToRgb(uri: string, size: number): Promise<Uint8Array> {
-  const original = await ImageManipulator.manipulate(uri).renderAsync();
-  const side = Math.min(original.width, original.height);
-  const square = await ImageManipulator.manipulate(uri)
-    .crop({
-      originX: Math.floor((original.width - side) / 2),
-      originY: Math.floor((original.height - side) / 2),
-      width: side,
-      height: side,
-    })
+  const resized = await ImageManipulator.manipulate(uri)
     .resize({ width: size, height: size })
     .renderAsync();
-  const { base64 } = await square.saveAsync({ format: SaveFormat.JPEG, compress: 1, base64: true });
+  const { base64 } = await resized.saveAsync({ format: SaveFormat.JPEG, compress: 1, base64: true });
   if (!base64) throw new Error('Image encode failed');
 
   const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));

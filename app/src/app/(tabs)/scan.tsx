@@ -18,13 +18,12 @@ import { Fonts, Spacing } from '@/constants/theme';
 import { addScan } from '@/db/history';
 import { addPantryItem, setPantryStatus } from '@/db/pantry';
 import { estimateCookBy, toIsoDate, type CookByEstimate } from '@/domain/cook-by';
-import { STORAGE_LABEL, UNIT_LABEL, type Purchase, type Stage, type Storage } from '@/domain/types';
+import { STAGE_LABEL, STORAGE_LABEL, UNIT_LABEL, type Purchase, type Stage, type Storage } from '@/domain/types';
 import { useTheme } from '@/hooks/use-theme';
 import { openScanner } from '@/lib/open-scanner';
-import { classify, DEMO_MODE, type Guess } from '@/ml/classifier';
+import { classify, CONFIDENCE_THRESHOLD, DEMO_MODE, describeGuess, type Guess } from '@/ml/classifier';
 
-const LOW_CONFIDENCE = 0.5;
-const MEAT_OR_FISH = new Set(['tilapia', 'bangus', 'galunggong', 'tamban', 'pork', 'chicken', 'beef']);
+const MEAT_OR_FISH = new Set(['fish', 'pork', 'chicken', 'beef']);
 
 const STORAGES: { value: Storage; label: string }[] = [
   { value: 'ref', label: 'Ref' },
@@ -36,6 +35,12 @@ const PURCHASES: { value: Purchase; label: string }[] = [
   { value: 'this_week', label: 'This week' },
   { value: 'over_a_week', label: 'Over a week ago' },
   { value: 'not_sure', label: 'Not sure' },
+];
+const FISH_STAGES: { value: Stage; label: string }[] = [
+  { value: 'fresh', label: 'Looks fresh' },
+  { value: 'good', label: 'Looks okay' },
+  { value: 'use_soon', label: 'Use soon' },
+  { value: 'spoiled', label: 'Spoiled (based on other signs)' },
 ];
 const BOUGHT: Record<Purchase, string> = {
   today: 'bought today',
@@ -54,6 +59,8 @@ type Scan = {
   item: string;
   stage: Stage;
   typedIn: boolean;
+  modelGuess?: Guess;
+  stageManuallyChosen?: boolean;
   storage?: Storage;
   purchase?: Purchase;
   estimate?: CookByEstimate;
@@ -72,6 +79,7 @@ type Step =
   | 'checking'
   | 'pickItem'
   | 'typeItem'
+  | 'fishStage'
   | 'storage'
   | 'purchase'
   | 'result'
@@ -83,6 +91,13 @@ function windowText(days: number) {
   if (days <= 0) return 'Today';
   if (days === 1) return 'Today or tomorrow';
   return `Within ${days} days`;
+}
+
+function scanFindingDetail(scan: Scan) {
+  if (scan.modelGuess) {
+    return `Model: ${describeGuess(scan.modelGuess)} · ${Math.round(scan.modelGuess.confidence * 100)}%`;
+  }
+  return scan.typedIn ? 'typed in' : 'identified';
 }
 
 /**
@@ -105,6 +120,7 @@ function ScanChat({ initialPhoto }: { initialPhoto?: string }) {
   const photo = initialPhoto ?? '';
   const [scan, setScan] = useState<Scan | null>(null);
   const [guesses, setGuesses] = useState<Guess[]>([]);
+  const [pendingFishGuess, setPendingFishGuess] = useState<Guess | null>(null);
   const [typed, setTyped] = useState('');
   const [quantity, setQuantity] = useState(1);
   const [unit, setUnit] = useState('pc');
@@ -118,8 +134,8 @@ function ScanChat({ initialPhoto }: { initialPhoto?: string }) {
     classify(initialPhoto).then(
       (top) => {
         setGuesses(top);
-        if (top[0] && top[0].confidence >= LOW_CONFIDENCE) {
-          identify(initialPhoto, top[0].item, top[0].stage, false);
+        if (top[0] && top[0].confidence >= CONFIDENCE_THRESHOLD) {
+          chooseGuess(top[0]);
         } else {
           // UC-1.4: not confident, so let the user pick or type the item.
           say({ kind: 'bot', text: "I'm not fully sure which item this is. Is it one of these?" });
@@ -138,13 +154,27 @@ function ScanChat({ initialPhoto }: { initialPhoto?: string }) {
     setMessages([]);
     setScan(null);
     setGuesses([]);
+    setPendingFishGuess(null);
     setTyped('');
     setStep('start');
   }
 
-  function identify(uri: string, item: string, stage: Stage | null, typedIn: boolean) {
-    // The placeholder model has no freshness stages yet, so assume Good.
-    const next: Scan = { photo: uri, item, stage: stage ?? 'good', typedIn };
+  function identify(
+    uri: string,
+    item: string,
+    stage: Stage | null,
+    typedIn: boolean,
+    modelGuess?: Guess,
+    stageManuallyChosen = false,
+  ) {
+    const next: Scan = {
+      photo: uri,
+      item,
+      stage: stage ?? 'good',
+      typedIn,
+      modelGuess,
+      stageManuallyChosen,
+    };
     setScan(next);
     if (next.stage === 'spoiled') {
       // UC-1.6
@@ -161,6 +191,26 @@ function ScanChat({ initialPhoto }: { initialPhoto?: string }) {
     identify(photo, item.toLowerCase(), stage, typedIn);
   }
 
+  function chooseGuess(guess: Guess) {
+    if (guess.item === 'fish' && guess.finding === 'non-fresh') {
+      setPendingFishGuess(guess);
+      say({
+        kind: 'bot',
+        text: `${describeGuess(guess)} (${Math.round(guess.confidence * 100)}% visual confidence). This is not a spoilage diagnosis. Based on your own check, what pantry stage should we use?`,
+      });
+      setStep('fishStage');
+      return;
+    }
+    identify(photo, guess.item, guess.stage, false, guess);
+  }
+
+  function answerFishStage(stage: Stage) {
+    if (!pendingFishGuess) return;
+    say({ kind: 'user', text: `Log as ${STAGE_LABEL[stage]}` });
+    identify(photo, 'fish', stage, false, pendingFishGuess, true);
+    setPendingFishGuess(null);
+  }
+
   function answerStorage(storage: Storage) {
     if (!scan) return;
     setScan({ ...scan, storage });
@@ -172,7 +222,7 @@ function ScanChat({ initialPhoto }: { initialPhoto?: string }) {
     if (!scan?.storage) return;
     const estimate = estimateCookBy(scan.item, scan.storage, scan.stage, purchase);
     // A typed-in item uses general shelf life, so confidence is low (UC-1.4).
-    if (scan.typedIn) estimate.confidence = 'low';
+    if (scan.typedIn || scan.stageManuallyChosen) estimate.confidence = 'low';
     const done: Scan = { ...scan, purchase, estimate };
     setScan(done);
     const label = PURCHASES.find((p) => p.value === purchase)?.label ?? purchase;
@@ -262,10 +312,16 @@ function ScanChat({ initialPhoto }: { initialPhoto?: string }) {
           <View style={styles.indent}>
             <Card style={styles.radioCard}>
               {guesses.map((g) => (
-                <Pressable key={g.label} onPress={() => pickItem(g.item, g.stage, false)} style={styles.radioRow}>
+                <Pressable
+                  key={g.label}
+                  onPress={() => {
+                    say({ kind: 'user', text: describeGuess(g) });
+                    chooseGuess(g);
+                  }}
+                  style={styles.radioRow}>
                   <Ionicons name="radio-button-off" size={18} color={theme.textSecondary} />
-                  <ThemedText type="smallBold" style={styles.capitalize}>
-                    {g.item}
+                  <ThemedText type="smallBold">
+                    {describeGuess(g)} · {Math.round(g.confidence * 100)}%
                   </ThemedText>
                 </Pressable>
               ))}
@@ -276,6 +332,15 @@ function ScanChat({ initialPhoto }: { initialPhoto?: string }) {
                 None of these, type it in
               </ThemedText>
             </Pressable>
+          </View>
+        )}
+
+        {step === 'fishStage' && (
+          <View style={styles.indent}>
+            <ThemedText type="caption" themeColor="textSecondary">
+              Choose based on your own check. A fish-view model result alone can’t determine whether the fish is spoiled.
+            </ThemedText>
+            <Chips options={FISH_STAGES} onPick={answerFishStage} />
           </View>
         )}
 
@@ -437,7 +502,7 @@ function Message({ msg }: { msg: Msg }) {
       return (
         <BotTurn>
           <Card>
-            <ItemRow scan={msg.scan} detail={msg.scan.typedIn ? 'typed in' : 'identified'} />
+            <ItemRow scan={msg.scan} detail={scanFindingDetail(msg.scan)} />
           </Card>
         </BotTurn>
       );
@@ -477,7 +542,16 @@ function ResultCard({ scan }: { scan: Scan }) {
   return (
     <BotTurn>
       <Card>
-        <ItemRow scan={scan} detail={`${STORAGE_LABEL[storage]} · ${BOUGHT[purchase]}`} />
+        <ItemRow
+          scan={scan}
+          detail={`${scanFindingDetail(scan)} · ${STORAGE_LABEL[storage]} · ${BOUGHT[purchase]}`}
+        />
+        {scan.stageManuallyChosen && scan.modelGuess && (
+          <Note icon="information-circle-outline" tone="amber">
+            Fish {scan.modelGuess.view ?? 'view'} looked non-fresh. You chose to log the pantry stage as{' '}
+            {STAGE_LABEL[scan.stage].toLowerCase()}.
+          </Note>
+        )}
         <View style={[styles.window, { backgroundColor: theme.dangerSoft }]}>
           <View style={{ flex: 1 }}>
             <ThemedText type="caption" themeColor="danger">

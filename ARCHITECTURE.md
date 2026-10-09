@@ -31,11 +31,11 @@ The phone never connects to MongoDB directly.
 |---|---|---|
 | `app/` | Mobile app | Expo (dev build), TypeScript, `expo-sqlite`, `react-native-fast-tflite` |
 | `backend/` | Sync API | Python 3.11, FastAPI, PyMongo async, MongoDB Atlas |
-| `ml/` | Model training and export | Python 3.11, TensorFlow + Keras, TFLite converter |
+| `ai-training/` | Dataset audit, MobileNetV3 Small training and confidence evaluation; see [training guide](ai-training/README.md) | Python 3.11 baseline, TensorFlow + Keras |
 
-## On-device AI (`ml/` → `app/`)
+## On-device AI (`ai-training/` → `app/`)
 
-1. Fine-tune Keras `MobileNetV3Small` (ImageNet weights) on freshness classes.
+1. Audit data and fine-tune Keras `MobileNetV3Small` (ImageNet weights) on joint food/freshness classes in `ai-training/`. Calibrate confidence on a separate split and review held-out test results before export; the training scripts do not automatically export or change app assets.
 2. Export with the TFLite converter using float16 or int8 quantization. Target size is under 5 MB.
 3. Copy `model.tflite` and `labels.json` into `app/assets/model/`.
 4. In the app, resize the photo to 224×224 RGB and run it with `react-native-fast-tflite`.

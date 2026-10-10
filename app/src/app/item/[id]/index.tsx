@@ -9,12 +9,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Pill, StagePill, URGENCY_COLOR } from '@/components/badges';
 import { Button } from '@/components/button';
 import { Card } from '@/components/card';
-import { Chips } from '@/components/chips';
+import { FoodArt } from '@/components/food-art';
+import { FreshnessCheck } from '@/components/freshness-check';
 import { Note } from '@/components/chat';
 import { ChoicePills, Segmented, Sheet, Stepper, Toast } from '@/components/controls';
 import { ThemedText } from '@/components/themed-text';
 import { ItemIcon } from '@/components/item-icon';
 import { Spacing, type ThemeColor } from '@/constants/theme';
+import { cancelPlan, doneCooking, planFor, type PlanState } from '@/db/cook-plans';
 import {
   finishPantryItem,
   getPantryItem,
@@ -32,7 +34,7 @@ import { useTheme } from '@/hooks/use-theme';
 import { pickPhoto } from '@/lib/open-scanner';
 import { analyzePhoto, shortError, type Analysis } from '@/ml/classifier';
 import { gateMessage } from '@/ml/gate';
-import { MSG, OWN_CHECK } from '@/ml/messages';
+import { MSG } from '@/ml/messages';
 import { QUALITY_MESSAGE } from '@/ml/quality';
 import { freshnessFor, itemOf } from '@/ml/read';
 
@@ -50,7 +52,12 @@ export default function ItemDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const db = useSQLiteContext();
   const theme = useTheme();
-  const [item, reload] = useFocusQuery<PantryItem | null | undefined>((d) => getPantryItem(d, id), undefined);
+  const [data, reload] = useFocusQuery<{ item: PantryItem | null; plan: PlanState | null } | undefined>(
+    async (d) => ({ item: await getPantryItem(d, id), plan: await planFor(d, id) }),
+    undefined,
+  );
+  const item = data === undefined ? undefined : data.item;
+  const plan = data?.plan ?? null;
   const [toast, setToast] = useState<{ message: string; undo?: PantryPatch } | null>(null);
   const [finishing, setFinishing] = useState<'used' | 'wasted' | null>(null);
   const [rescan, setRescan] = useState<{ photo: string; stage: Stage | null; ask?: string } | null>(null);
@@ -128,16 +135,14 @@ export default function ItemDetailScreen() {
       ]);
       return;
     }
-    // Trust the photo only when the model clearly sees this same item and is clear about freshness;
-    // otherwise ask the user's own check (UC-1.4, P07).
+    // Only clear spoilage of this same item is taken from the photo; a fresh reading is a hint,
+    // so the user's own check sets the stage (UC-1.4, P07, ml/read.ts).
     const known = itemOf(item!.name);
     const fresh = known ? freshnessFor(a.items, known, a.verdict) : 'unclear';
-    if (fresh === 'unclear') {
-      const sameItem = known && a.verdict.confident && a.verdict.best.item === known;
-      setRescan({ photo, stage: null, ask: sameItem ? MSG.unclearFreshness : "I can't tell for sure from this photo." });
-      return;
-    }
-    setRescan({ photo, stage: fresh });
+    if (fresh === 'spoiled') return setRescan({ photo, stage: 'spoiled' });
+    if (fresh === 'fresh') return setRescan({ photo, stage: null, ask: MSG.looksFresh(known!) });
+    const sameItem = known && a.verdict.confident && a.verdict.best.item === known;
+    setRescan({ photo, stage: null, ask: sameItem ? MSG.unclearFreshness : "I can't tell for sure from this photo." });
   }
 
   async function saveRescan() {
@@ -239,12 +244,7 @@ export default function ItemDetailScreen() {
           </View>
         ) : (
           <View style={{ gap: Spacing.two }}>
-            {/* UC-2.7: dishes that use this item plus other urgent ones */}
-            <Button
-              title="Cook with this"
-              icon="restaurant-outline"
-              onPress={() => router.push({ pathname: '/recipes', params: { focus: item.name } })}
-            />
+            <CookButton item={item} plan={plan} onChanged={reload} />
             <View style={styles.row}>
               <Button title="Rescan" icon="scan" size="small" variant="secondary" onPress={startRescan} />
               <Button title="Used" icon="checkmark" size="small" variant="secondary" onPress={() => setFinishing('used')} />
@@ -288,6 +288,87 @@ export default function ItemDetailScreen() {
         )}
       </Sheet>
     </SafeAreaView>
+  );
+}
+
+/**
+ * The item's cook button (Cook with this v2): Cook with this (UC-2.7) → Waiting for
+ * ingredients while the recipe's list items aren't bought → Done cooking (UC-2.10).
+ */
+function CookButton({ item, plan, onChanged }: { item: PantryItem; plan: PlanState | null; onChanged: () => void }) {
+  const db = useSQLiteContext();
+  const cookWithThis = () => router.push({ pathname: '/recipes', params: { focus: item.name, main: item.id } });
+  if (!plan) return <Button title="Cook with this" icon="restaurant-outline" onPress={cookWithThis} />;
+
+  function changePlan() {
+    Alert.alert(plan!.recipe_title, 'Its items you haven’t bought yet leave your shopping list.', [
+      { text: 'Keep plan', style: 'cancel' },
+      {
+        text: 'Change recipe',
+        onPress: async () => {
+          await cancelPlan(db, plan!);
+          cookWithThis();
+        },
+      },
+      {
+        text: 'Cancel plan',
+        style: 'destructive',
+        onPress: async () => {
+          await cancelPlan(db, plan!);
+          onChanged();
+        },
+      },
+    ]);
+  }
+
+  function done() {
+    Alert.alert('Done cooking?', `Your ${item.name} and the other ticked pantry items count as used in ${plan!.recipe_title}.`, [
+      { text: 'Not yet', style: 'cancel' },
+      {
+        text: 'Done cooking',
+        onPress: async () => {
+          await doneCooking(db, plan!);
+          router.dismissTo('/pantry');
+        },
+      },
+    ]);
+  }
+
+  const waiting = plan.left_to_buy > 0;
+  const viewRecipe = () => router.push({ pathname: '/recipes/[id]', params: { id: plan.recipe_id, main: item.id } });
+  return (
+    <View style={{ gap: Spacing.two }}>
+      {/* The dish picked for this item (from Cook with this or a scan): open it any time before Done cooking. */}
+      <Card style={styles.planCard}>
+        <Pressable onPress={viewRecipe} accessibilityRole="button" accessibilityLabel={`View recipe: ${plan.recipe_title}`} style={styles.planMain}>
+          <FoodArt size={44} radius={10} recipeId={plan.recipe_id} />
+          <View style={{ flex: 1 }}>
+            <ThemedText type="caption" themeColor="textSecondary">
+              Planned dish
+            </ThemedText>
+            <ThemedText type="smallBold">{plan.recipe_title}</ThemedText>
+            <ThemedText type="label" themeColor="tintText">
+              View recipe ›
+            </ThemedText>
+          </View>
+        </Pressable>
+        <Pressable onPress={changePlan} hitSlop={8} accessibilityRole="button" accessibilityLabel="Change or cancel this plan">
+          <ThemedText type="label" themeColor="tintText">
+            Change
+          </ThemedText>
+        </Pressable>
+      </Card>
+      {waiting ? (
+        <Button
+          title={`Waiting · ${plan.left_to_buy} left to buy`}
+          icon="list"
+          variant="soft"
+          onPress={() => router.push('/shopping')}
+        />
+      ) : (
+        <Button title="Done cooking" icon="checkmark-done" onPress={done} />
+      )}
+    </View>
   );
 }
 
@@ -383,7 +464,7 @@ function RescanResult({
     return (
       <>
         <ThemedText type="small">{`${ask} ${MSG.ownCheck}`}</ThemedText>
-        <Chips options={OWN_CHECK} onPick={onOwnCheck} />
+        <FreshnessCheck item={itemOf(item.name)} onDone={onOwnCheck} />
       </>
     );
   }
@@ -396,9 +477,12 @@ function RescanResult({
     );
   }
   const next = recompute(item, { stage });
+  // Time since purchase overrides how it looks: past the safe window is never "fresh".
+  const pastWindow = stage !== 'spoiled' && daysUntil(next.cook_by!) < 0;
+  const within = (cookBy: string) => (daysUntil(cookBy) < 0 ? 'Past safe date' : longCountdown(daysUntil(cookBy)));
   const rows: [string, string, string][] = [
     ['Stage', STAGE_LABEL[item.stage], STAGE_LABEL[stage]],
-    ['Cook within', longCountdown(daysUntil(item.cook_by)), longCountdown(daysUntil(next.cook_by!))],
+    ['Cook within', within(item.cook_by), within(next.cook_by!)],
     ['Confidence', capitalize(item.confidence), capitalize(next.confidence!)],
   ];
   return (
@@ -447,6 +531,11 @@ function RescanResult({
           </View>
         ))}
       </Card>
+      {pastWindow && (
+        <Note icon="warning-outline" tone="danger">
+          {`It's past the safe window for ${item.name} bought then and kept like this, even if it looks fine. Don't cook it.`}
+        </Note>
+      )}
       <ThemedText type="caption" themeColor="textSecondary">
         Both scans stay in this item&apos;s history. Photos never leave your phone.
       </ThemedText>
@@ -576,5 +665,7 @@ const styles = StyleSheet.create({
   compareCell: { width: 92 },
   option: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three - 4, borderWidth: 1, borderRadius: 14, padding: Spacing.three - 4 },
   optionIcon: { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  planCard: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  planMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.three - 4 },
   textButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.one + 2, paddingVertical: Spacing.two },
 });

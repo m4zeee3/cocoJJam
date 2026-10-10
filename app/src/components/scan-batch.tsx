@@ -10,6 +10,7 @@ import { Button } from '@/components/button';
 import { Card } from '@/components/card';
 import { BotBubble, BotTurn, Note, PhotoGrid, TimeDivider, UserBubble } from '@/components/chat';
 import { Chips } from '@/components/chips';
+import { FreshnessCheck } from '@/components/freshness-check';
 import { BOUGHT, cookLine, PURCHASES, STORAGES, type Msg } from '@/components/scan-shared';
 import { TAB_BAR_CLEARANCE } from '@/components/screen';
 import { ThemedText } from '@/components/themed-text';
@@ -36,8 +37,8 @@ type Row = {
   /** Fish only: bangus, tilapia, galunggong or fish (other). */
   species?: string;
   stage?: Stage;
-  /** The photo can't settle freshness (UC-1.11): skipped until it is retaken on its own. */
-  unclear?: boolean;
+  /** What the photo said about freshness, shown above the user's own check: the photo alone never sets fresh. */
+  hint?: 'looks_fresh' | 'unclear';
   storage?: Storage;
 };
 
@@ -64,7 +65,7 @@ function problem(r: Row): string | null {
   return null;
 }
 
-const skipped = (r: Row) => r.status === 'done' && (problem(r) !== null || r.item === 'none' || !!r.unclear);
+const skipped = (r: Row) => r.status === 'done' && (problem(r) !== null || r.item === 'none');
 const ready = (r: Row) => !!r.item && r.item !== 'none' && !!r.stage && (r.item !== 'fish' || !!r.species);
 const nameOf = (r: Row) => (r.item === 'fish' ? (r.species ?? 'fish') : (r.item as string));
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -112,9 +113,15 @@ export function BatchScan({ photos, onChange }: { photos: string[]; onChange: (m
 
   function answerItem(i: number, choice: Item | 'none') {
     const a = rows[i].analysis;
-    if (choice === 'none' || a?.kind !== 'ok') return patch(i, { item: choice, stage: undefined, unclear: false });
+    if (choice === 'none' || a?.kind !== 'ok') return patch(i, { item: choice, stage: undefined, hint: undefined });
     const fresh = freshnessFor(a.items, choice, a.verdict);
-    patch(i, { item: choice, species: undefined, stage: fresh === 'unclear' ? undefined : fresh, unclear: fresh === 'unclear' });
+    // Spoiled from the photo is final; otherwise the user's own check sets the stage (ml/read.ts).
+    patch(i, {
+      item: choice,
+      species: undefined,
+      stage: fresh === 'spoiled' ? 'spoiled' : undefined,
+      hint: fresh === 'fresh' ? 'looks_fresh' : fresh === 'unclear' ? 'unclear' : undefined,
+    });
   }
 
   const done = rows.filter((r) => r.status === 'done').length;
@@ -201,7 +208,7 @@ export function BatchScan({ photos, onChange }: { photos: string[]; onChange: (m
     const lines = rows.map((r, i) => {
       const why = problem(r);
       if (why) return `• Photo ${i + 1}: skipped (${why.toLowerCase()})`;
-      if (r.item === 'none' || r.unclear) return `• Photo ${i + 1}: skipped, scan it on its own`;
+      if (r.item === 'none') return `• Photo ${i + 1}: skipped, scan it on its own`;
       if (!ready(r)) return `• Photo ${i + 1}: not confirmed`;
       const e = estimate(r);
       const what = !e ? STAGE_LABEL[r.stage!] : unsafe(r) ? 'not added to pantry' : e.safety === 'counter_now' ? 'cook or ref it within 2 hours' : cookLine(e.daysLeft, e.maxDays).toLowerCase();
@@ -280,7 +287,8 @@ export function BatchScan({ photos, onChange }: { photos: string[]; onChange: (m
                   locked={phase === 'results' || phase === 'saved'}
                   onItem={(c) => answerItem(i, c)}
                   onSpecies={(s) => patch(i, { species: s })}
-                  onChange={() => patch(i, { item: undefined, species: undefined, stage: undefined, unclear: false })}
+                  onStage={(s) => patch(i, { stage: s })}
+                  onChange={() => patch(i, { item: undefined, species: undefined, stage: undefined, hint: undefined })}
                 />
               ))}
             </Card>
@@ -454,6 +462,7 @@ function ReviewRow({
   locked,
   onItem,
   onSpecies,
+  onStage,
   onChange,
 }: {
   row: Row;
@@ -462,6 +471,7 @@ function ReviewRow({
   locked: boolean;
   onItem: (c: Item | 'none') => void;
   onSpecies: (s: string) => void;
+  onStage: (s: Stage) => void;
   onChange: () => void;
 }) {
   const theme = useTheme();
@@ -482,15 +492,7 @@ function ReviewRow({
     title = `Photo ${index + 1}: skipped`;
     body = (
       <ThemedText type="caption" themeColor="textSecondary">
-        Not the item I guessed. Scan it on its own to check it.
-      </ThemedText>
-    );
-  } else if (r.unclear && r.item) {
-    // UC-1.11: the photo can't settle freshness
-    title = cap(r.item);
-    body = (
-      <ThemedText type="caption" themeColor="textSecondary">
-        Photo unclear · retake it up close on its own to check
+        Not beef, pork, chicken or fish. Scan it on its own to check it.
       </ThemedText>
     );
   } else if (!r.item && guess) {
@@ -499,6 +501,18 @@ function ReviewRow({
   } else if (r.item === 'fish' && !r.species) {
     title = 'Which fish is it?';
     body = <Chips options={FISH_SPECIES} onPick={onSpecies} />;
+  } else if (r.item && !r.stage) {
+    // The user's own check sets the stage; the photo alone never says fresh (UC-1.11).
+    title = cap(nameOf(r));
+    body = (
+      <>
+        <ThemedText type="caption" themeColor="textSecondary">
+          {r.hint === 'looks_fresh' ? "Looks fresh in the photo, but a photo can't show smell." : "Can't read freshness from the photo."}{' '}
+          {MSG.ownCheck}
+        </ThemedText>
+        <FreshnessCheck item={r.item as Item} onDone={onStage} />
+      </>
+    );
   } else {
     title = cap(nameOf(r));
   }
@@ -513,16 +527,15 @@ function ReviewRow({
             {title}
           </ThemedText>
           {complete && <StagePill stage={r.stage!} />}
-          {r.unclear && <Pill label="Retake" tone={{ fg: 'textSecondary', bg: 'backgroundSelected' }} />}
-          {!complete && !r.unclear && !why && r.item !== 'none' && <Pill label="Confirm" tone={{ fg: 'amber', bg: 'amberSoft' }} />}
+          {!complete && !why && r.item !== 'none' && <Pill label="Confirm" tone={{ fg: 'amber', bg: 'amberSoft' }} />}
         </View>
         {complete && (
           <ThemedText type="caption" themeColor="textSecondary">
-            {r.item === 'fish' ? 'From your photo · fish type picked by you' : 'From your photo'}
+            {[r.hint ? 'From your own check' : 'From your photo', r.item === 'fish' ? 'fish type picked by you' : null].filter(Boolean).join(' · ')}
           </ThemedText>
         )}
         {body}
-        {!locked && (complete || r.item === 'none' || r.unclear) && (
+        {!locked && (complete || r.item === 'none' || (!!r.item && !r.stage)) && (
           <Pressable onPress={onChange} hitSlop={6}>
             <ThemedText type="label" themeColor="tintText">
               Change

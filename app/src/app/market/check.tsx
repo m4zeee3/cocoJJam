@@ -11,6 +11,7 @@ import { Button } from '@/components/button';
 import { Card } from '@/components/card';
 import { Note } from '@/components/chat';
 import { ChoicePills, Sheet } from '@/components/controls';
+import { FreshnessCheck } from '@/components/freshness-check';
 import { BoughtSheet, PalengkeHeader, PriceBar, VerdictCard, verdictColor } from '@/components/palengke';
 import { ThemedText } from '@/components/themed-text';
 import { Fonts, Spacing } from '@/constants/theme';
@@ -44,14 +45,15 @@ const UNITS: { value: VendorUnit; label: string }[] = (Object.keys(VENDOR_UNIT_L
 
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-type Phase = 'identifying' | 'pickItem' | 'retake' | 'spoiled' | 'species' | 'price' | 'verdict';
+type Phase = 'identifying' | 'pickItem' | 'ownCheck' | 'spoiled' | 'species' | 'price' | 'verdict';
 
 const QUALITY_SHORT: Record<QualityIssue, string> = { too_dark: 'Too dark', too_bright: 'Too bright', blurry: 'Too blurry' };
 
 /**
  * Palengke check: identify (M02), cut or fish (M03, M03b), price, verdict (M04–M08), bought (M09),
- * compare? (M10). Spoiled stops before the price (M13), unclear freshness asks for a close-up
- * (M14), and a photo that can't be checked asks for a retake (M15).
+ * compare? (M10). Spoiled stops before the price (M13). Otherwise the buyer's own check sets the
+ * stage, as the photo alone never says fresh (ml/read.ts); unclear freshness also offers a close-up
+ * retake (M14), and a photo that can't be checked asks for a retake (M15).
  */
 export default function PalengkeCheckScreen() {
   const { photo } = useLocalSearchParams<{ photo: string }>();
@@ -67,6 +69,8 @@ function Check({ photo }: { photo: string }) {
   const [reading, setReading] = useState<{ items: ItemRead[]; verdict: ItemVerdict } | null>(null);
   const [item, setItem] = useState('');
   const [stage, setStage] = useState<Stage>('good');
+  /** What the photo said about freshness, shown with the buyer's own check. */
+  const [hint, setHint] = useState<'looks_fresh' | 'corrected' | 'unclear'>('unclear');
   const [note, setNote] = useState<string | null>(null);
   const [cut, setCut] = useState<string | null>(null);
   const [askCut, setAskCut] = useState(false);
@@ -104,17 +108,15 @@ function Check({ photo }: { photo: string }) {
     analyzePhoto(photo).then(handleAnalysis, failed);
   }, [photo]);
 
-  /** The user confirmed or named the item. Freshness comes from the photo only when it's clear. */
+  /** The user confirmed or named the item. Only clear spoilage in the photo skips the buyer's own check. */
   function pickItem(choice: Item | 'none') {
-    if (choice === 'none') return setInvalid({ text: MSG.notIt, short: 'Not the item I guessed' });
+    if (choice === 'none') return setInvalid({ text: MSG.notIt, short: 'Not beef, pork, chicken or fish' });
     if (!reading) return;
     const fresh = freshnessFor(reading.items, choice, reading.verdict);
-    if (fresh === 'unclear') {
-      // M14 (UC-1.11): can't read freshness from this photo, so retake a close-up; never guess.
-      setItem(choice);
-      return setPhase('retake');
-    }
-    choose(choice, fresh, MSG.disclaimer);
+    if (fresh === 'spoiled') return choose(choice, 'spoiled', MSG.disclaimer);
+    setItem(choice);
+    setHint(fresh === 'fresh' ? 'looks_fresh' : choice !== reading.verdict.best.item ? 'corrected' : 'unclear');
+    setPhase('ownCheck');
   }
 
   function choose(name: string, s: Stage, why: string) {
@@ -194,7 +196,7 @@ function Check({ photo }: { photo: string }) {
         {phase === 'spoiled' && (
           <VerdictCard kind="dont_buy" title="Don't buy this" body="It looks spoiled, so there's no need to check the price." />
         )}
-        {phase === 'retake' && (
+        {phase === 'ownCheck' && hint === 'unclear' && (
           <VerdictCard
             kind="retake"
             title={item === 'fish' ? 'Get closer to the eye and gills' : 'Get closer to the cut surface'}
@@ -247,8 +249,10 @@ function Check({ photo }: { photo: string }) {
             <View style={{ flex: 1 }}>
               <ThemedText type="smallBold">{displayName}</ThemedText>
               <ThemedText type="caption" themeColor="textSecondary">
-                {phase === 'retake'
-                  ? 'Freshness unclear'
+                {phase === 'ownCheck'
+                  ? hint === 'looks_fresh'
+                    ? 'Looks fresh in the photo'
+                    : 'Freshness unclear from the photo'
                   : [phase === 'verdict' && check ? `1 ${unitShort(unit)}` : null, note ?? 'Identified on-device'].filter(Boolean).join(' · ')}
               </ThemedText>
               {phase === 'price' && (
@@ -259,12 +263,26 @@ function Check({ photo }: { photo: string }) {
                 </Pressable>
               )}
             </View>
-            {phase === 'retake' ? <Pill label="Can't tell" tone={{ fg: 'textSecondary', bg: 'backgroundSelected' }} /> : <StagePill stage={stage} />}
+            {phase === 'ownCheck' ? <Pill label="Your check" tone={{ fg: 'amber', bg: 'amberSoft' }} /> : <StagePill stage={stage} />}
+          </Card>
+        )}
+
+        {/* The buyer's own check sets the stage: a photo can't show smell or slime. */}
+        {phase === 'ownCheck' && (
+          <Card style={{ gap: Spacing.two }}>
+            <ThemedText type="small">
+              {hint === 'looks_fresh'
+                ? `${MSG.looksFresh(item as Item)} ${MSG.ownCheck}`
+                : hint === 'corrected'
+                  ? `${MSG.corrected(item as Item)} ${MSG.ownCheck}`
+                  : MSG.orOwnCheck}
+            </ThemedText>
+            <FreshnessCheck item={item as Item} onDone={(s) => choose(item, s, 'From your own check')} />
           </Card>
         )}
 
         {/* M14: how to retake */}
-        {phase === 'retake' && (
+        {phase === 'ownCheck' && hint === 'unclear' && (
           <Card style={{ gap: Spacing.two }}>
             <ThemedText type="smallBold">For a clear check</ThemedText>
             {RETAKE_TIPS[item === 'fish' ? 'fish' : 'meat'].map((t) => (
@@ -363,12 +381,13 @@ function Check({ photo }: { photo: string }) {
       </ScrollView>
 
       <View style={styles.footer}>
-        {(invalid || phase === 'retake' || phase === 'spoiled') && (
+        {(invalid || phase === 'ownCheck' || phase === 'spoiled') && (
           <>
             <Button
-              title={invalid ? 'Retake photo' : phase === 'retake' ? 'Retake close-up' : 'Scan another'}
+              title={invalid ? 'Retake photo' : phase === 'ownCheck' ? 'Retake close-up' : 'Scan another'}
               icon="scan"
-              onPress={phase === 'retake' || invalid ? () => retake() : scanAnother}
+              variant={phase === 'ownCheck' ? 'secondary' : undefined}
+              onPress={phase === 'ownCheck' || invalid ? () => retake() : scanAnother}
             />
             <Button title="Done" variant="secondary" onPress={() => router.back()} />
           </>

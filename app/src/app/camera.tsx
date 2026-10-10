@@ -13,7 +13,7 @@ import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
 import { useSteady } from '@/hooks/use-steady';
 import { useTheme } from '@/hooks/use-theme';
-import { finishCapture } from '@/lib/camera-session';
+import { finishCapture, tagCapture } from '@/lib/camera-session';
 import { MAX_PHOTOS, pickFromGallery } from '@/lib/open-scanner';
 import { CAPTURE_TIPS } from '@/ml/messages';
 
@@ -72,6 +72,7 @@ export default function CameraScreen() {
   }
 
   function add(uris: string[]) {
+    tagCapture(uris, kind);
     const next = [...shots, ...uris].slice(0, MAX_PHOTOS);
     if (mode === 'single' || next.length >= MAX_PHOTOS) return finish(next);
     setShots(next);

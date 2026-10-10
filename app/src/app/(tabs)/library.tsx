@@ -68,7 +68,7 @@ export default function LibraryScreen() {
           <>
             <ThemedText type="section">Remove from bookmarks?</ThemedText>
             <Card tone="background" style={styles.removeRow}>
-              <FoodArt size={44} />
+              <FoodArt size={44} recipeId={removing.recipe.id} />
               <View style={{ flex: 1 }}>
                 <ThemedText type="smallBold">{removing.recipe.title}</ThemedText>
                 <ThemedText type="caption" themeColor="textSecondary">
@@ -206,11 +206,11 @@ function RecipesTab({ saved, onRemove }: { saved: Saved[]; onRemove: (s: Saved) 
           return (
             <Pressable
               key={s.recipe.id}
-              onPress={() => router.push({ pathname: '/recipes/[id]', params: { id: s.recipe.id } })}
+              onPress={() => router.push({ pathname: '/recipes/[id]', params: { id: s.recipe.id, view: '1' } })}
               accessibilityRole="button"
               style={styles.cell}>
               <Card style={styles.recipeCard}>
-                <FoodArt size={0} style={styles.cellArt} />
+                <FoodArt size={110} style={styles.cellArt} recipeId={s.recipe.id} />
                 <Pressable onPress={() => onRemove(s)} accessibilityLabel="Remove bookmark" hitSlop={8} style={[styles.bookmark, { backgroundColor: theme.backgroundElement }]}>
                   <Ionicons name="bookmark" size={14} color={theme.tint} />
                 </Pressable>

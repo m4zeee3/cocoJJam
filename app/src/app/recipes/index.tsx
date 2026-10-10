@@ -49,9 +49,12 @@ function relaxLabel(r: Restriction) {
   }[r.value];
 }
 
-/** R03 Dishes for you (UC-3.1, 3.3), R08 no matches (UC-3.6). `?focus=bangus` = Cook with this (UC-2.7). */
+/**
+ * R03 Dishes for you (UC-3.1, 3.3), R08 no matches (UC-3.6). `?focus=bangus` = Cook with this (UC-2.7);
+ * `main` is that pantry item's id, passed on so the recipe locks it as the main ingredient (UC-3.10).
+ */
 export default function DishesScreen() {
-  const { focus } = useLocalSearchParams<{ focus?: string }>();
+  const { focus, main } = useLocalSearchParams<{ focus?: string; main?: string }>();
   const db = useSQLiteContext();
   const theme = useTheme();
   const [data, reload] = useFocusQuery(load, null as { pantry: PantryItem[]; profile: Profile | null; spent: number } | null);
@@ -151,7 +154,7 @@ export default function DishesScreen() {
               {sort === 'cheapest' ? 'cheapest to buy for first' : 'ranked by how many of your urgent items they use'}
             </ThemedText>
             {matches.map((r) => (
-              <DishCard key={r.id} recipe={r} best={r.id === ranked[0]?.id} budget={budget} />
+              <DishCard key={r.id} recipe={r} best={r.id === ranked[0]?.id} budget={budget} main={main} />
             ))}
             <ThemedText type="caption" themeColor="textSecondary" style={styles.center}>
               Prices are estimates for {active.household_size} servings at {priceMonth('long')} prices (NCR)
@@ -212,17 +215,20 @@ function RoundButton({ icon, label, onPress }: { icon: keyof typeof Ionicons.gly
   );
 }
 
-function DishCard({ recipe, best, budget }: { recipe: RecipeView; best: boolean; budget: Budget | null }) {
+function DishCard({ recipe, best, budget, main }: { recipe: RecipeView; best: boolean; budget: Budget | null; main?: string }) {
   const theme = useTheme();
   const flag = budgetFlag(recipe.toBuy, budget);
   return (
     <Pressable
       onPress={() =>
-        router.push({ pathname: '/recipes/[id]', params: { id: recipe.id, servings: String(recipe.servingsShown) } })
+        router.push({
+          pathname: '/recipes/[id]',
+          params: { id: recipe.id, servings: String(recipe.servingsShown), ...(main ? { main } : {}) },
+        })
       }
       accessibilityRole="button">
       <Card style={[styles.dish, best && { borderColor: theme.tint, borderWidth: 1.5 }]}>
-        <FoodArt size={72} />
+        <FoodArt size={72} recipeId={recipe.id} />
         <View style={{ flex: 1, gap: 2 }}>
           {(best || flag) && (
             <View style={styles.inline}>

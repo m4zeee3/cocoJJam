@@ -2,6 +2,8 @@ import { requireOptionalNativeModule } from 'expo';
 import * as ImagePicker from 'expo-image-picker';
 import { router } from 'expo-router';
 
+import type { Kind } from '@/ml/read';
+
 /**
  * Opens the in-app camera (src/app/camera.tsx) and resolves with the photos taken,
  * or null when the user closes it. One session at a time: a new one cancels the old.
@@ -25,6 +27,19 @@ async function systemCamera(): Promise<string[] | null> {
   if (!granted) return null;
   const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.8 });
   return result.canceled ? null : result.assets.map((a) => a.uri);
+}
+
+// The Meat/Fish choice each camera photo was taken with, so the scan can catch fish read as pork.
+const kinds = new Map<string, Kind>();
+
+/** Called by the camera screen as photos are added, with the Meat/Fish choice at that moment. */
+export function tagCapture(uris: string[], kind: Kind) {
+  for (const uri of uris) kinds.set(uri, kind);
+}
+
+/** Meat or Fish, for a photo from the in-app camera; undefined for the system camera or gallery. */
+export function capturedKind(uri: string): Kind | undefined {
+  return kinds.get(uri);
 }
 
 /** Called by the camera screen once, when it finishes or closes. */

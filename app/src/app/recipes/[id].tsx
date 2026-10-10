@@ -2,22 +2,23 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSQLiteContext, type SQLiteDatabase } from 'expo-sqlite';
 import { useCallback, useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Pill } from '@/components/badges';
-import { AddToListSheet } from '@/components/add-to-list-sheet';
 import { BudgetNote } from '@/components/budget';
 import { BreakdownSheet, ChangePill, SwapSheet, WhySheet } from '@/components/price-sheets';
 import { Button } from '@/components/button';
 import { Card } from '@/components/card';
 import { Stepper, Toast } from '@/components/controls';
-import { FoodArt } from '@/components/food-art';
+import { FoodArt, hasRecipeImage } from '@/components/food-art';
 import { ThemedText } from '@/components/themed-text';
 import { Fonts, Spacing } from '@/constants/theme';
 import { isBookmarked, toggleBookmark } from '@/db/bookmarks';
+import { doneCooking, planFor, startPlan, type PlanState, type PlanUse } from '@/db/cook-plans';
 import { listActivePantry, type PantryItem } from '@/db/pantry';
 import { getProfile, profileSummary, type Profile } from '@/db/profile';
+import { addToList, type ListLine } from '@/db/shopping';
 import { budgetFlag, budgetFrom, spentThisWeek } from '@/domain/budget';
 import { peso, priceMonth } from '@/domain/prices';
 import { DEFAULT_PROFILE, getRecipe, swapFor, viewRecipe, type Line } from '@/domain/recipes';
@@ -29,9 +30,18 @@ import { getSession } from '@/sync/session';
 
 const MEAT_OR_FISH = new Set(['bangus', 'tilapia', 'galunggong', 'pork', 'chicken', 'beef']);
 
-/** R04 recipe detail (UC-3.4), R05 change servings (UC-3.7), R06 bookmark (UC-3.5). */
+/**
+ * R04 recipe detail (UC-3.4), R05 change servings (UC-3.7), R06 bookmark (UC-3.5),
+ * R09 tick what you have (UC-3.10). `main` = the pantry item from Cook with this;
+ * without it, the most urgent pantry item the dish uses. `view=1` (Library) is read-only.
+ */
 export default function RecipeDetailScreen() {
-  const { id, servings: servingsParam } = useLocalSearchParams<{ id: string; servings?: string }>();
+  const { id, servings: servingsParam, main, view: viewParam } = useLocalSearchParams<{
+    id: string;
+    servings?: string;
+    main?: string;
+    view?: string;
+  }>();
   const recipe = getRecipe(id);
   const theme = useTheme();
   const load = useCallback(
@@ -43,13 +53,31 @@ export default function RecipeDetailScreen() {
         getSession(db),
         spentThisWeek(db),
       ]);
-      return { pantry, profile, saved, signedIn: !!session, spent };
+      const recipe = getRecipe(id);
+      // The main ingredient: the item Cook with this (or a scan) opened it for; else the dish's own
+      // main ingredient (its first) from the pantry, most urgent first; else any pantry item it uses.
+      const uses = recipe ? new Set(recipe.ingredients.map((i) => i.item)) : new Set<string>();
+      const mainItem =
+        pantry.find((p) => p.id === main) ??
+        pantry.find((p) => p.name === recipe?.ingredients[0]?.item) ??
+        pantry.find((p) => uses.has(p.name)) ??
+        null;
+      const plan = mainItem ? await planFor(db, mainItem.id) : null;
+      return { pantry, profile, saved, signedIn: !!session, spent, mainItem, plan };
     },
-    [id],
+    [id, main],
   );
-  const [data] = useFocusQuery(
+  const [data, reload] = useFocusQuery(
     load,
-    null as { pantry: PantryItem[]; profile: Profile | null; saved: boolean; signedIn: boolean; spent: number } | null,
+    null as {
+      pantry: PantryItem[];
+      profile: Profile | null;
+      saved: boolean;
+      signedIn: boolean;
+      spent: number;
+      mainItem: PantryItem | null;
+      plan: PlanState | null;
+    } | null,
   );
 
   if (!recipe) {
@@ -75,6 +103,10 @@ export default function RecipeDetailScreen() {
       signedIn={data.signedIn}
       weeklyBudget={data.profile?.weekly_budget_php ?? null}
       spent={data.spent}
+      viewOnly={viewParam === '1'}
+      mainItem={data.mainItem}
+      plan={data.plan}
+      onChanged={reload}
     />
   );
 }
@@ -88,6 +120,10 @@ function Detail({
   signedIn,
   weeklyBudget,
   spent,
+  viewOnly,
+  mainItem,
+  plan,
+  onChanged,
 }: {
   recipeId: string;
   pantry: PantryItem[];
@@ -97,6 +133,10 @@ function Detail({
   signedIn: boolean;
   weeklyBudget: number | null;
   spent: number;
+  viewOnly: boolean;
+  mainItem: PantryItem | null;
+  plan: PlanState | null;
+  onChanged: () => void;
 }) {
   const db = useSQLiteContext();
   const theme = useTheme();
@@ -105,9 +145,12 @@ function Detail({
   const [servings, setServings] = useState(initialServings);
   const [saved, setSaved] = useState(initiallySaved);
   const [toast, setToast] = useState<string | null>(null);
-  const [sheet, setSheet] = useState<
-    { kind: 'breakdown' } | { kind: 'why'; item: string } | { kind: 'swap' } | { kind: 'list' } | null
-  >(null);
+  const [sheet, setSheet] = useState<{ kind: 'breakdown' } | { kind: 'why'; item: string } | { kind: 'swap' } | null>(null);
+  // UC-3.10: what the user has. Pantry items start ticked; the main ingredient is locked.
+  const [ticked, setTicked] = useState<Set<string>>(() => {
+    const start = viewRecipe(recipe, pantry, initialServings).lines.filter((l) => l.have === 'all').map((l) => l.item);
+    return new Set(mainItem ? [...start, mainItem.name] : start);
+  });
   const hideToast = useCallback(() => setToast(null), [setToast]);
   // Community bookmark count (UC-3.5), when the sync server is reachable.
   const [community, setCommunity] = useState<number | null>(null);
@@ -120,12 +163,18 @@ function Detail({
   }, [recipeId]);
 
   const view = viewRecipe(recipe, pantry, servings);
+  const mainKey = mainItem?.name ?? null;
+  // Unticked lines go on the list: the part not in the pantry, or the whole line if unticked by hand.
+  const toBuy: ListLine[] = view.lines
+    .filter((l) => !ticked.has(l.item))
+    .map((l) => ({ ...l, price: l.cost == null ? null : l.have === 'some' ? l.toBuy : l.cost }));
+  const buyTotal = toBuy.reduce((s, l) => s + (l.price ?? 0), 0);
+  const thisPlan = plan && plan.recipe_id === recipe.id ? plan : null;
   // UC-3.8: warn against the saved weekly budget; the dish stays cookable.
   const budget = budgetFrom(weeklyBudget, spent);
-  const flag = budgetFlag(view.toBuy, budget);
+  const flag = budgetFlag(viewOnly ? view.toBuy : buyTotal, budget);
   // UC-4.3: a cheaper dish when the main ingredient is pricier than usual.
   const swap = swapFor(recipe, pantry, profile ?? DEFAULT_PROFILE, servings);
-  const missingCount = view.lines.filter((l) => l.have !== 'all').length;
   const base = viewRecipe(recipe, pantry, recipe.servings);
   const scaled = servings !== recipe.servings;
   const inPantry = view.lines.filter((l) => l.have !== 'none').length;
@@ -147,11 +196,59 @@ function Detail({
     );
   }
 
+  function toggle(item: string) {
+    if (item === mainKey) return;
+    setTicked((cur) => {
+      const next = new Set(cur);
+      if (next.has(item)) next.delete(item);
+      else next.add(item);
+      return next;
+    });
+  }
+
+  /** UC-3.10 / 9.1: unticked lines go on the list; with a main ingredient the item now waits for them. */
+  async function addOrStart() {
+    if (!mainItem) {
+      const { added, merged } = await addToList(db, recipe, toBuy);
+      setToast(added + merged > 0 ? `Added ${toBuy.length} to your shopping list.` : 'Already on your shopping list.');
+      return;
+    }
+    const uses: PlanUse[] = [mainItem, ...pantry.filter((p) => p.id !== mainItem.id)]
+      .filter((p, i, all) => ticked.has(p.name) && all.findIndex((q) => q.name === p.name) === i)
+      .map((p) => {
+        const line = view.lines.find((l) => l.item === p.name);
+        return { id: p.id, qty: line?.qty ?? p.quantity, unit: line?.unit ?? p.unit };
+      });
+    await startPlan(db, recipe, uses, toBuy);
+    setToast(
+      toBuy.length > 0
+        ? `Added ${toBuy.length} to your list. Your ${mainItem.name} shows Done cooking once they're bought.`
+        : `All set. Tap Done cooking when the ${recipe.title.toLowerCase()} is done.`,
+    );
+    onChanged();
+  }
+
+  /** UC-2.10 */
+  function confirmDone(p: PlanState) {
+    const name = mainItem?.name ?? 'item';
+    Alert.alert('Done cooking?', `Your ${name} and the other ticked pantry items count as used in ${p.recipe_title}.`, [
+      { text: 'Not yet', style: 'cancel' },
+      {
+        text: 'Done cooking',
+        onPress: async () => {
+          await doneCooking(db, p);
+          router.dismissTo('/pantry');
+        },
+      },
+    ]);
+  }
+
   return (
     <View style={[styles.safe, { backgroundColor: theme.background }]}>
       <ScrollView contentContainerStyle={{ paddingBottom: 120 + insets.bottom }}>
         <View style={[styles.hero, { backgroundColor: theme.highlight, paddingTop: insets.top }]}>
-          <FoodArt size={160} radius={0} style={styles.heroArt} />
+          {/* A photo fills the whole header; the placeholder keeps its tile at the bottom. */}
+          <FoodArt size={160} radius={0} recipeId={recipeId} style={hasRecipeImage(recipeId) ? StyleSheet.absoluteFill : styles.heroArt} />
           <View style={[styles.heroBar, { top: insets.top + Spacing.two }]}>
             <RoundButton icon="chevron-back" label="Back" onPress={() => router.back()} />
             <RoundButton icon={saved ? 'bookmark' : 'bookmark-outline'} label={saved ? 'Remove bookmark' : 'Bookmark'} onPress={bookmark} active={saved} />
@@ -208,9 +305,13 @@ function Detail({
             </View>
             <View style={styles.between}>
               <ThemedText type="caption" themeColor="textSecondary" style={{ flex: 1 }}>
-                {view.toBuy < 1
-                  ? 'Everything is already in your pantry'
-                  : `${peso(view.toBuy)} to buy · the rest is already in your pantry`}
+                {viewOnly
+                  ? view.toBuy < 1
+                    ? 'Everything is already in your pantry'
+                    : `${peso(view.toBuy)} to buy · the rest is already in your pantry`
+                  : buyTotal < 1
+                    ? 'You have everything'
+                    : `${peso(buyTotal)} to buy · the rest you have`}
                 {view.unpriced > 0 ? ` · partial estimate, leaves out ${view.unpriced}` : ''}
               </ThemedText>
               <Pressable onPress={() => setSheet({ kind: 'breakdown' })} hitSlop={8} style={styles.inline}>
@@ -235,18 +336,32 @@ function Detail({
               </Card>
             </Pressable>
           )}
-          <BudgetNote flag={flag} toBuy={view.toBuy} budget={budget} />
+          <BudgetNote flag={flag} toBuy={viewOnly ? view.toBuy : buyTotal} budget={budget} />
 
           <View style={{ gap: Spacing.two }}>
             <View style={styles.between}>
               <ThemedText type="section">{scaled ? `Ingredients for ${servings}` : 'Ingredients'}</ThemedText>
               <ThemedText type="label" themeColor={scaled ? 'tintText' : 'fresh'}>
-                {scaled ? `${fullyCovered} of ${view.lines.length} fully covered` : `${inPantry} of ${view.lines.length} in your pantry`}
+                {!viewOnly && !thisPlan
+                  ? 'Tick what you have'
+                  : scaled
+                    ? `${fullyCovered} of ${view.lines.length} fully covered`
+                    : `${inPantry} of ${view.lines.length} in your pantry`}
               </ThemedText>
             </View>
             <Card style={{ gap: 0, paddingVertical: Spacing.one }}>
               {view.lines.map((l, i) => (
-                <IngredientRow key={l.item} line={l} divider={i > 0} onWhy={() => setSheet({ kind: 'why', item: l.item })} />
+                <IngredientRow
+                  key={l.item}
+                  line={l}
+                  divider={i > 0}
+                  onWhy={() => setSheet({ kind: 'why', item: l.item })}
+                  tick={
+                    viewOnly || thisPlan
+                      ? undefined
+                      : { on: ticked.has(l.item), main: l.item === mainKey, onToggle: () => toggle(l.item) }
+                  }
+                />
               ))}
             </Card>
           </View>
@@ -278,17 +393,6 @@ function Detail({
       </ScrollView>
 
       {sheet?.kind === 'breakdown' && <BreakdownSheet view={view} onClose={() => setSheet(null)} />}
-      {sheet?.kind === 'list' && (
-        <AddToListSheet
-          view={view}
-          budget={budget}
-          onClose={() => setSheet(null)}
-          onAdded={(n) => {
-            setSheet(null);
-            setToast(n > 0 ? `Added ${n} item${n === 1 ? '' : 's'} to your shopping list.` : 'Already on your shopping list.');
-          }}
-        />
-      )}
       {sheet?.kind === 'why' && <WhySheet item={sheet.item} onClose={() => setSheet(null)} />}
       {sheet?.kind === 'swap' && swap && (
         <SwapSheet
@@ -310,14 +414,29 @@ function Detail({
             variant={saved ? 'soft' : 'secondary'}
             onPress={bookmark}
           />
-          {/* N03 / UC-9.1 */}
-          <View style={{ flex: 1 }}>
-            {missingCount > 0 ? (
-              <Button title={`Add ${missingCount} to shopping list`} icon="list" onPress={() => setSheet({ kind: 'list' })} />
-            ) : (
-              <Button title="All in your pantry" icon="checkmark" variant="soft" onPress={() => {}} disabled />
-            )}
-          </View>
+          {!viewOnly && (
+            <View style={{ flex: 1 }}>
+              {thisPlan ? (
+                thisPlan.left_to_buy > 0 ? (
+                  <Button
+                    title={`Waiting · ${thisPlan.left_to_buy} left to buy`}
+                    icon="list"
+                    variant="soft"
+                    onPress={() => router.push('/shopping')}
+                  />
+                ) : (
+                  <Button title="Done cooking" icon="checkmark-done" onPress={() => confirmDone(thisPlan)} />
+                )
+              ) : toBuy.length > 0 ? (
+                // UC-9.1: the button shows the count and cost, so no confirm sheet
+                <Button title={`Add ${toBuy.length} to list · ${peso(buyTotal)}`} icon="list" onPress={addOrStart} />
+              ) : mainItem ? (
+                <Button title="Start cooking" icon="restaurant-outline" onPress={addOrStart} />
+              ) : (
+                <Button title="You have everything" icon="checkmark" variant="soft" onPress={() => {}} disabled />
+              )}
+            </View>
+          )}
         </View>
       </View>
     </View>
@@ -355,10 +474,53 @@ function Meta({ icon, text }: { icon: keyof typeof Ionicons.glyphMap; text: stri
   );
 }
 
-function IngredientRow({ line, divider, onWhy }: { line: Line; divider: boolean; onWhy: () => void }) {
+function IngredientRow({
+  line,
+  divider,
+  onWhy,
+  tick,
+}: {
+  line: Line;
+  divider: boolean;
+  onWhy: () => void;
+  /** R09: a checkbox meaning "I have this"; `main` is the locked main ingredient. */
+  tick?: { on: boolean; main: boolean; onToggle: () => void };
+}) {
   const theme = useTheme();
-  return (
-    <View style={[styles.ingredient, divider && { borderTopWidth: 1, borderTopColor: theme.backgroundSelected }]}>
+  const priceText = (n: number | null) => (n == null ? 'No price data' : peso(n));
+  const right = tick ? (
+    tick.main ? (
+      <Pill label="Main ingredient" tone={{ fg: 'textSecondary', bg: 'backgroundSelected' }} />
+    ) : tick.on ? (
+      <Pill label="You have this" tone={{ fg: 'fresh', bg: 'freshSoft' }} />
+    ) : (
+      <ThemedText type="smallBold" style={{ fontFamily: Fonts.bold }}>
+        {priceText(line.cost == null ? null : line.have === 'some' ? line.toBuy : line.cost)}
+      </ThemedText>
+    )
+  ) : line.have === 'all' ? (
+    <Pill label="You have this" tone={{ fg: 'fresh', bg: 'freshSoft' }} />
+  ) : line.have === 'some' ? (
+    <Pill label={line.haveText ?? 'You have some'} tone={{ fg: 'amber', bg: 'amberSoft' }} />
+  ) : (
+    <ThemedText type="smallBold" style={{ fontFamily: Fonts.bold }}>
+      {priceText(line.cost)}
+    </ThemedText>
+  );
+  const body = (
+    <>
+      {tick && (
+        <View
+          style={[
+            styles.box,
+            {
+              borderColor: tick.main ? theme.textSecondary : theme.tint,
+              backgroundColor: tick.main ? theme.textSecondary : tick.on ? theme.tint : 'transparent',
+            },
+          ]}>
+          {tick.on && <Ionicons name="checkmark" size={14} color="#fff" />}
+        </View>
+      )}
       <View style={{ flex: 1 }}>
         <View style={styles.inline}>
           <ThemedText type="smallBold">{line.name}</ThemedText>
@@ -368,19 +530,28 @@ function IngredientRow({ line, divider, onWhy }: { line: Line; divider: boolean;
           </Pressable>
         </View>
         <ThemedText type="caption" themeColor="textSecondary">
-          {line.amount}
+          {tick && !tick.on && line.have === 'some' ? `${line.amount} · ${line.haveText?.toLowerCase()}` : line.amount}
         </ThemedText>
       </View>
-      {line.have === 'all' ? (
-        <Pill label="You have this" tone={{ fg: 'fresh', bg: 'freshSoft' }} />
-      ) : line.have === 'some' ? (
-        <Pill label={line.haveText ?? 'You have some'} tone={{ fg: 'amber', bg: 'amberSoft' }} />
-      ) : (
-        <ThemedText type="smallBold" style={{ fontFamily: Fonts.bold }}>
-          {line.cost == null ? 'No price data' : peso(line.cost)}
-        </ThemedText>
-      )}
-    </View>
+      {right}
+    </>
+  );
+  const rowStyle = [
+    styles.ingredient,
+    divider && { borderTopWidth: 1, borderTopColor: theme.backgroundSelected },
+    tick?.main && { opacity: 0.55 },
+  ];
+  if (!tick) return <View style={rowStyle}>{body}</View>;
+  return (
+    <Pressable
+      onPress={tick.onToggle}
+      disabled={tick.main}
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked: tick.on, disabled: tick.main }}
+      accessibilityLabel={tick.main ? `${line.name}, main ingredient` : `I have ${line.name}`}
+      style={rowStyle}>
+      {body}
+    </Pressable>
   );
 }
 
@@ -398,6 +569,7 @@ const styles = StyleSheet.create({
   divider: { height: 1, marginVertical: Spacing.one },
   swapBanner: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three - 4 },
   ingredient: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, paddingVertical: Spacing.two + 2 },
+  box: { width: 22, height: 22, borderRadius: 6, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
   step: { flexDirection: 'row', gap: Spacing.three - 4, alignItems: 'flex-start' },
   stepNum: { width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', marginTop: 1 },
   toastSlot: { position: 'absolute', left: Spacing.three, right: Spacing.three },

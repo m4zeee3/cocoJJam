@@ -18,6 +18,8 @@ export type Scan = {
   rulesKey?: string;
   /** Fish: the view the model looked at. */
   view?: 'eye' | 'gill' | null;
+  /** The stage is the user's own check (smell, color, texture), not the photo. */
+  ownCheck?: boolean;
   storage?: Storage;
   purchase?: Purchase;
   estimate?: CookByEstimate;
@@ -28,8 +30,11 @@ export type Msg =
   /** Start of a scan: "Today 5:09 PM". */
   | { kind: 'divider'; at: number }
   | { kind: 'photos'; uris: string[] }
-  /** Dishes picked for the scanned item (R01), with a link to the full list. */
-  | { kind: 'dishes'; item: string; dishes: { id: string; title: string; minutes: number; cost: number }[] }
+  /**
+   * Dishes picked for the scanned item (R01), with a link to the full list. `mainId` = the
+   * item's pantry row once saved, so a dish picked here is planned for it (UC-3.10).
+   */
+  | { kind: 'dishes'; item: string; mainId?: string; dishes: { id: string; title: string; minutes: number; cost: number }[] }
   | { kind: 'bot'; text: string }
   | { kind: 'user'; text: string }
   | { kind: 'photo'; uri: string }

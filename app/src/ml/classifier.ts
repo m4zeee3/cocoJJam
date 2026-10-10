@@ -8,6 +8,7 @@ import type { Stage } from '@/domain/types';
 import GATE_LABELS from '@/assets/model/gate/imagenet-labels.json';
 import { Image } from 'react-native';
 
+import { capturedKind } from '@/lib/camera-session';
 import { hasFace } from '@/ml/faces';
 import { fishLikeShare, judgeGate, type GateReject } from '@/ml/gate';
 import { judgeItems, readItems, type ItemRead, type Verdict } from '@/ml/read';
@@ -128,9 +129,10 @@ export type Analysis =
  * cooked food), 4. the freshness model, read safely (ml/read.ts).
  */
 export async function analyzePhoto(uri: string, opts: { skipQuality?: boolean } = {}): Promise<Analysis> {
+  const kind = capturedKind(uri);
   const verdictOf = (all: Guess[], fishLike: number) => {
     const items = readItems(all);
-    const verdict = judgeItems(items, all[0]?.confidence ?? 0, CONFIDENCE_THRESHOLD, fishLike);
+    const verdict = judgeItems(items, all[0]?.confidence ?? 0, CONFIDENCE_THRESHOLD, fishLike, kind);
     return { kind: 'ok' as const, guesses: all.slice(0, 3), items, verdict };
   };
   if (DEMO_MODE) return verdictOf(await classify(uri, LABELS.length), 0);

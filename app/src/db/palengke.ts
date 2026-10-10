@@ -85,5 +85,12 @@ export async function buyFromCheck(db: SQLiteDatabase, check: PalengkeCheck, sto
     paid_price_php: check.price,
   });
   await db.runAsync(`UPDATE palengke_checks SET bought = 1 WHERE id = ?`, check.id);
+  // The same item on the shopping list is now bought: check it off. It's already in the
+  // pantry, so it leaves the list instead of being moved in a second time (Module 9 v2).
+  await db.runAsync(
+    `UPDATE shopping_items SET checked = 1, checked_at = ?, moved_pantry_id = ?, deleted = 1
+     WHERE id = (SELECT id FROM shopping_items WHERE deleted = 0 AND checked = 0 AND item = ? ORDER BY created_at LIMIT 1)`,
+    Date.now(), pantryId, check.item,
+  );
   return { pantryId, daysLeft: est.daysLeft };
 }

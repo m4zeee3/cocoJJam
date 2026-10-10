@@ -14,7 +14,16 @@ import { ThemedText } from '@/components/themed-text';
 import { ItemIcon } from '@/components/item-icon';
 import { Spacing } from '@/constants/theme';
 import { getProfile } from '@/db/profile';
-import { budgetSwaps, listShopping, moveBoughtToPantry, removeFromList, setChecked, type BudgetSwap, type ShoppingItem } from '@/db/shopping';
+import {
+  budgetSwaps,
+  listShopping,
+  moveBoughtToPantry,
+  recipeTags,
+  removeFromList,
+  setChecked,
+  type BudgetSwap,
+  type ShoppingItem,
+} from '@/db/shopping';
 import { budgetFrom, spentThisWeek } from '@/domain/budget';
 import { peso, proteinOf } from '@/domain/prices';
 import type { Storage } from '@/domain/types';
@@ -40,7 +49,13 @@ export default function ShoppingListScreen() {
   const open = items.filter((i) => !i.checked);
   const bought = items.filter((i) => i.checked);
   const total = open.reduce((s, i) => s + (i.price ?? 0), 0);
-  const recipes = [...new Set(items.map((i) => i.recipe_title ?? 'Other'))];
+  const recipes = [...new Set(items.flatMap(recipeTags))];
+  // N04: grouped by the recipe each item is for. An item shared by two recipes is one row,
+  // under the first, marked "also for" the others.
+  const groups = [...new Set(items.map((i) => recipeTags(i)[0] ?? 'Other items'))].map((g) => ({
+    g,
+    rows: items.filter((i) => (recipeTags(i)[0] ?? 'Other items') === g),
+  }));
   const over = budget ? total - budget.left : 0;
   const swaps = over > 0 ? budgetSwaps(open) : [];
   // N05: over budget with a way down → show just the warning and the suggestions.
@@ -58,8 +73,8 @@ export default function ShoppingListScreen() {
   }
 
   function share() {
-    const text = recipes
-      .map((r) => `${r}\n${items.filter((i) => (i.recipe_title ?? 'Other') === r).map((i) => `${i.checked ? '☑' : '☐'} ${i.name}: ${i.amount}`).join('\n')}`)
+    const text = groups
+      .map(({ g, rows }) => `${g}\n${rows.map((i) => `${i.checked ? '☑' : '☐'} ${i.name}: ${i.amount}`).join('\n')}`)
       .join('\n\n');
     Share.share({ message: `Shopping list\n\n${text}\n\nTotal ≈ ${peso(total)}` });
   }
@@ -84,7 +99,7 @@ export default function ShoppingListScreen() {
           </View>
           <ThemedText type="section">Your list is empty</ThemedText>
           <ThemedText type="small" themeColor="textSecondary" style={{ textAlign: 'center' }}>
-            Open a dish and tap Add to list. Only what your pantry doesn&apos;t have is added.
+            Open a dish, tick what you have, and the rest goes on your list.
           </ThemedText>
           <View style={{ alignSelf: 'stretch' }}>
             <Button title="Find dishes to cook" onPress={() => router.push('/recipes')} />
@@ -172,12 +187,11 @@ export default function ShoppingListScreen() {
             </Note>
           )}
 
-          {!suggesting && recipes.map((r) => {
-            const rows = items.filter((i) => (i.recipe_title ?? 'Other') === r);
+          {!suggesting && groups.map(({ g, rows }) => {
             return (
-              <View key={r} style={{ gap: Spacing.two }}>
+              <View key={g} style={{ gap: Spacing.two }}>
                 <ThemedText type="caption" themeColor="textSecondary">
-                  {r.toUpperCase()}
+                  {g.toUpperCase()}
                 </ThemedText>
                 <Card style={{ gap: 0, paddingVertical: Spacing.one }}>
                   {rows.map((i, n) => (
@@ -242,7 +256,9 @@ function ListRow({ item, divider, onToggle, onRemove }: { item: ShoppingItem; di
             {item.name}
           </ThemedText>
           <ThemedText type="caption" themeColor="textSecondary">
-            {item.amount}
+            {[item.amount, recipeTags(item).length > 1 ? `also for ${recipeTags(item).slice(1).join(', ')}` : null]
+              .filter(Boolean)
+              .join(' · ')}
           </ThemedText>
         </View>
         <ThemedText type="smallBold" themeColor={on ? 'textSecondary' : 'text'}>

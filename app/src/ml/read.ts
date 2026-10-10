@@ -40,26 +40,32 @@ export function readItems(all: Scored[]): ItemRead[] {
   }).sort((a, b) => b.share - a.share);
 }
 
+/** What the user said they were scanning on the camera screen. */
+export type Kind = 'meat' | 'fish';
+
 export type Verdict = {
   /** Most likely item, to pre-select in "Is this beef?". */
   best: ItemRead;
   /** Sure enough to say "This looks like beef". Otherwise "I can't tell for sure". */
   confident: boolean;
   /** Why it isn't confident, for logging. */
-  reason?: 'low' | 'close_call' | 'fish_vs_meat';
+  reason?: 'low' | 'close_call' | 'fish_vs_meat' | 'kind_mismatch';
 };
 
 /**
  * `threshold` is the model's calibrated confidence threshold (deployment.json).
  * `fishLike` is how much the general model saw fish in the photo.
+ * `kind` is the Meat/Fish choice on the camera, when the photo came from there.
  */
-export function judgeItems(items: ItemRead[], topConfidence: number, threshold: number, fishLike: number): Verdict {
+export function judgeItems(items: ItemRead[], topConfidence: number, threshold: number, fishLike: number, kind?: Kind): Verdict {
   const [best, second] = items;
   if (topConfidence < threshold) return { best, confident: false, reason: 'low' };
   // Two items nearly tied (e.g. beef 0.55 vs pork 0.45): don't pretend to know.
   if (second && best.share - second.share < 0.3) return { best, confident: false, reason: 'close_call' };
   // The general model clearly sees fish but this one says meat (or the reverse).
   if (best.item !== 'fish' && fishLike >= 0.3) return { best, confident: false, reason: 'fish_vs_meat' };
+  // The user said Fish but the model says meat (or the reverse): fillets and slices read as pork.
+  if (kind && (best.item === 'fish') !== (kind === 'fish')) return { best, confident: false, reason: 'kind_mismatch' };
   return { best, confident: true };
 }
 
@@ -71,6 +77,10 @@ export type FreshRead = 'fresh' | 'spoiled' | 'unclear';
  * vs spoiled. Otherwise "unclear": the app asks the user's own check, never guesses.
  * Fish "non-fresh" is a visual observation, not spoilage (assets/model/README.md),
  * so fish is only ever "fresh" or "unclear".
+ *
+ * Only "spoiled" is acted on straight away. "fresh" is a hint: the model has called
+ * spoiled pork fresh, and a photo can't show smell or slime, so the user's own check
+ * (components/freshness-check.tsx) always sets the stage. A false "spoiled" wastes food; a false "fresh" is unsafe.
  */
 export function freshnessFor(items: ItemRead[], item: Item, verdict: Verdict): FreshRead {
   if (!verdict.confident || item !== verdict.best.item) return 'unclear';

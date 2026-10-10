@@ -105,6 +105,26 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE pantry_items ADD COLUMN finish_note TEXT;
   `,
+  // 7: Cook with this plans (UC-2.10, 3.10), kept on the phone only. A plan links a pantry item to the
+  // recipe picked for it and to the list rows bought for it; when none are left to buy it shows Done cooking.
+  `
+  CREATE TABLE cook_plans (
+    id TEXT PRIMARY KEY NOT NULL,
+    created_at INTEGER NOT NULL,
+    pantry_id TEXT NOT NULL,        -- the main ingredient, locked as ticked on the recipe
+    recipe_id TEXT NOT NULL,
+    recipe_title TEXT NOT NULL,
+    uses_json TEXT NOT NULL,        -- [{ id, qty, unit }]: pantry items ticked on the recipe, main first
+    status TEXT NOT NULL DEFAULT 'active'  -- active | cooked | cancelled
+  );
+  CREATE INDEX cook_plans_by_item ON cook_plans (pantry_id, status);
+
+  CREATE TABLE plan_items (
+    plan_id TEXT NOT NULL,
+    shopping_id TEXT NOT NULL,
+    PRIMARY KEY (plan_id, shopping_id)
+  );
+  `,
 ];
 
 export async function migrate(db: SQLiteDatabase) {

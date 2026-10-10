@@ -1,5 +1,4 @@
-import type { Item } from '@/ml/read';
-import type { Stage } from '@/domain/types';
+import { ITEMS, type Item } from '@/ml/read';
 
 /**
  * Every scan reply in one place, worded safely (UC-1.4–1.9): no percentages,
@@ -18,8 +17,13 @@ export const MSG = {
   unsure: "I can't tell for sure what this is from the photo. Please try another photo.",
   /** The user said No to the model's item: loop back to a new photo. */
   notIt: "Okay, let's try another photo.",
-  looksLike: (item: Item) => `This looks like ${ITEM_NAME[item]}. Is that right?`,
+  looksLike: (item: Item) => `This looks like ${ITEM_NAME[item]}. Is that right? If not, pick what it is.`,
   confirmHint: 'Your answer sets the item. The photo only suggests it.',
+  /** The photo leans fresh, but a photo can't show smell or slime, so the user's check decides. */
+  looksFresh: (item: Item) =>
+    `The ${ITEM_NAME[item]} looks fresh in the photo, but a photo can't show smell or sliminess.`,
+  /** The user picked a different item than the model: its freshness reading was for the wrong item. */
+  corrected: (item: Item) => `Got it, ${ITEM_NAME[item]}. I can't read its freshness from this photo.`,
   /** UC-1.11 (S15, S09b): freshness unclear, so the user retakes a close-up. */
   retake: (item: Item) =>
     item === 'fish'
@@ -28,24 +32,31 @@ export const MSG = {
   unclearFreshness: "I can't judge its freshness reliably from this photo.",
   fishView: (view: 'eye' | 'gill') =>
     `The fish's ${view === 'eye' ? 'eye' : 'gills'} look less fresh in this photo. That alone doesn't mean it's spoiled.`,
-  ownCheck: 'Based on your own check (smell, color, texture), how does it look?',
+  /** Before the item's freshness signs (domain/freshness-signs.ts). */
+  ownCheck: 'Check it yourself and tell me what you find:',
+  /** After a retake request: the user can answer from their own check instead. */
+  orOwnCheck: 'Or check it yourself and tell me what you find:',
   disclaimer: 'Visual estimate on your phone, not a food-safety check.',
 };
 
-/** Choices for the user's own check when the photo can't settle freshness. */
-export const OWN_CHECK: { value: Stage; label: string }[] = [
-  { value: 'fresh', label: 'Looks and smells fresh' },
-  { value: 'good', label: 'Looks okay' },
-  { value: 'use_soon', label: 'Use it soon' },
-  { value: 'spoiled', label: 'Smells off or slimy' },
-];
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-/** "This looks like pork. Is that right?" → Yes goes on to freshness, No ('none') asks for another photo. */
+/**
+ * "This looks like pork. Is that right?" → "Yes, pork", or pick the right item (the model
+ * mixes up beef, pork and chicken). "Something else" ('none') asks for another photo.
+ */
 export function itemChoices(item: Item): { value: Item | 'none'; label: string }[] {
   return [
     { value: item, label: `Yes, ${ITEM_NAME[item]}` },
-    { value: 'none', label: 'No' },
+    ...ITEMS.filter((i) => i !== item).map((i) => ({ value: i, label: cap(ITEM_NAME[i]) })),
+    { value: 'none', label: 'Something else' },
   ];
+}
+
+/** The user's answer to the item question, as their chat bubble. */
+export function itemAnswer(choice: Item | 'none', guess: Item) {
+  if (choice === 'none') return 'Something else';
+  return choice === guess ? `Yes, ${ITEM_NAME[choice]}` : cap(ITEM_NAME[choice]);
 }
 
 export type Tip = { icon: 'scan-outline' | 'cut-outline' | 'sunny-outline' | 'eye-outline' | 'hand-left-outline' | 'contrast-outline' | 'bulb-outline'; text: string };

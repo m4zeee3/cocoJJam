@@ -3,8 +3,8 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 
 import { addPantryItem } from '@/db/pantry';
 import { estimateCookBy, toIsoDate } from '@/domain/cook-by';
-import { NOTABLE_CHANGE, priceFor, priceInfo, proteinOf } from '@/domain/prices';
-import type { Line } from '@/domain/recipes';
+import { changeLabel, NOTABLE_CHANGE, priceFor, priceInfo, proteinOf } from '@/domain/prices';
+import { formatAmount, type Line } from '@/domain/recipes';
 import type { Storage } from '@/domain/types';
 
 export type ShoppingItem = {
@@ -23,26 +23,62 @@ export type ShoppingItem = {
   moved_pantry_id: string | null;
 };
 
-/** N03 (UC-9.1): add the recipe lines the pantry doesn't cover. Same item from the same recipe isn't added twice. */
-export async function addToList(db: SQLiteDatabase, recipe: { id: string; title: string }, lines: Line[]) {
+/** A line to buy: a recipe ingredient the user didn't tick as "I have this" (UC-3.10). */
+export type ListLine = Pick<Line, 'item' | 'name' | 'qty' | 'unit' | 'amount'> & { price: number | null };
+
+/** Recipes a row is for, as stored in `recipe_title`: "Sinigang na Bangus, Chicken Adobo". */
+export const recipeTags = (i: Pick<ShoppingItem, 'recipe_title'>) => (i.recipe_title ? i.recipe_title.split(', ') : []);
+
+/**
+ * UC-9.1: put a recipe's unticked lines on the list, one row per item. An item
+ * already on the list (same unit, not bought yet) gets this recipe's amount
+ * added and the recipe tagged, unless that recipe is already counted in it.
+ * With `planId`, every row is linked to the plan so it knows what's left to buy.
+ */
+export async function addToList(
+  db: SQLiteDatabase,
+  recipe: { id: string; title: string },
+  lines: ListLine[],
+  planId?: string,
+) {
   const now = Date.now();
   let added = 0;
-  await db.withTransactionAsync(async () => {
+  let merged = 0;
+  const run = async () => {
     for (const l of lines) {
-      const dup = await db.getFirstAsync<{ n: number }>(
-        `SELECT COUNT(*) AS n FROM shopping_items WHERE deleted = 0 AND checked = 0 AND item = ? AND recipe_id = ?`,
-        l.item, recipe.id,
+      const same = await db.getFirstAsync<ShoppingItem>(
+        `SELECT * FROM shopping_items WHERE deleted = 0 AND checked = 0 AND item = ? AND unit = ? ORDER BY created_at LIMIT 1`,
+        l.item, l.unit,
       );
-      if (dup?.n) continue;
-      await db.runAsync(
-        `INSERT INTO shopping_items (id, created_at, item, name, qty, unit, amount, price, recipe_id, recipe_title)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        randomUUID(), now, l.item, l.name, l.qty, l.unit, l.amount, l.cost == null ? null : l.toBuy, recipe.id, recipe.title,
-      );
-      added++;
+      let rowId: string;
+      if (same) {
+        rowId = same.id;
+        if (!recipeTags(same).includes(recipe.title)) {
+          const qty = same.qty + l.qty;
+          await db.runAsync(
+            `UPDATE shopping_items SET qty = ?, amount = ?, price = ?, recipe_title = ? WHERE id = ?`,
+            qty, formatAmount(qty, l.unit),
+            same.price == null && l.price == null ? null : (same.price ?? 0) + (l.price ?? 0),
+            [...recipeTags(same), recipe.title].join(', '), same.id,
+          );
+          merged++;
+        }
+      } else {
+        rowId = randomUUID();
+        await db.runAsync(
+          `INSERT INTO shopping_items (id, created_at, item, name, qty, unit, amount, price, recipe_id, recipe_title)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          rowId, now, l.item, l.name, l.qty, l.unit, l.amount, l.price, recipe.id, recipe.title,
+        );
+        added++;
+      }
+      if (planId) await db.runAsync(`INSERT OR IGNORE INTO plan_items (plan_id, shopping_id) VALUES (?, ?)`, planId, rowId);
     }
-  });
-  return added;
+  };
+  // Callers that already hold a transaction (startPlan) pass their own.
+  if (planId) await run();
+  else await db.withTransactionAsync(run);
+  return { added, merged };
 }
 
 /** Items on the list (bought ones stay visible, checked, until moved or cleared). */
@@ -79,11 +115,13 @@ export function listGroup(item: string): ListGroup {
   return GULAY.has(item) ? 'Gulay' : 'Others';
 }
 
-/** A way to bring the list under budget (N05). */
-export type Swap = {
-  id: string;
+/** A way to bring the list under budget (N05): `item` is the row it changes, `from`/`to` the item keys (to = null: dropped). */
+export type BudgetSwap = {
+  item: ShoppingItem;
+  from: string;
+  to: string | null;
   title: string;
-  why: string;
+  reason: string;
   saves: number;
   apply: (db: SQLiteDatabase) => Promise<void>;
 };
@@ -95,7 +133,7 @@ const SOUP_GULAY = ['radish', 'sitaw', 'kangkong'];
 const MIN_SAVING = 10;
 
 /** Pork or beef → chicken for the same weight (UC-9.1, 4.3). */
-function proteinSwap(i: ShoppingItem): Swap | null {
+function proteinSwap(i: ShoppingItem): BudgetSwap | null {
   const kind = proteinOf(i.item);
   if ((kind !== 'pork' && kind !== 'beef') || i.price == null) return null;
   const kg = i.unit === 'g' ? i.qty / 1000 : i.unit === 'kg' ? i.qty : null;
@@ -105,9 +143,11 @@ function proteinSwap(i: ShoppingItem): Swap | null {
   const change = priceInfo(kind)?.change ?? 0;
   const name = kind === 'pork' ? 'Pork' : 'Beef';
   return {
-    id: i.id,
+    item: i,
+    from: i.item,
+    to: 'chicken',
     title: `Swap ${i.name.toLowerCase()} for chicken`,
-    why: change >= NOTABLE_CHANGE
+    reason: change >= NOTABLE_CHANGE
       ? `${name} is ${changeLabel(change).slice(1)} above usual this month`
       : `${i.recipe_title ?? 'Same dish'} · same weight`,
     saves: i.price - chicken,
@@ -121,7 +161,7 @@ function proteinSwap(i: ShoppingItem): Swap | null {
 }
 
 /** Skip one sinigang vegetable and buy half again of another from the same recipe. */
-function gulaySwap(skip: ShoppingItem, more: ShoppingItem): Swap | null {
+function gulaySwap(skip: ShoppingItem, more: ShoppingItem): BudgetSwap | null {
   if (skip.price == null || more.price == null) return null;
   const extra = more.price / 2;
   const saves = skip.price - extra;
@@ -130,9 +170,11 @@ function gulaySwap(skip: ShoppingItem, more: ShoppingItem): Swap | null {
   const prep = more.amount.includes(',') ? more.amount.slice(more.amount.indexOf(',')) : '';
   const dish = skip.recipe_title?.replace(/ na .*/, '').toLowerCase() ?? 'dish';
   return {
-    id: skip.id,
+    item: skip,
+    from: skip.item,
+    to: more.item,
     title: `Skip ${skip.name.replace(/ \(.*\)/, '').toLowerCase()}, add more ${more.name.toLowerCase()}`,
-    why: `Same ${dish}, a little different`,
+    reason: `Same ${dish}, a little different`,
     saves,
     apply: async (db) => {
       await db.withTransactionAsync(async () => {
@@ -147,14 +189,14 @@ function gulaySwap(skip: ShoppingItem, more: ShoppingItem): Swap | null {
 }
 
 /** N05: swaps for the unchecked items, biggest saving first. One vegetable swap per recipe. */
-export function budgetSwaps(open: ShoppingItem[]): Swap[] {
-  const swaps = open.map(proteinSwap).filter((s): s is Swap => s != null);
+export function budgetSwaps(open: ShoppingItem[]): BudgetSwap[] {
+  const swaps = open.map(proteinSwap).filter((s): s is BudgetSwap => s != null);
   const recipes = new Set(open.map((i) => i.recipe_id));
   for (const r of recipes) {
     const soup = open.filter((i) => i.recipe_id === r && SOUP_GULAY.includes(i.item) && i.price != null);
     const best = soup
       .flatMap((skip) => soup.filter((m) => m !== skip).map((more) => gulaySwap(skip, more)))
-      .filter((s): s is Swap => s != null)
+      .filter((s): s is BudgetSwap => s != null)
       .sort((a, b) => b.saves - a.saves)[0];
     if (best) swaps.push(best);
   }

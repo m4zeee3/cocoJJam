@@ -12,7 +12,9 @@ import { Screen } from '@/components/screen';
 import { ThemedText } from '@/components/themed-text';
 import { ItemIcon } from '@/components/item-icon';
 import { Fonts, Spacing } from '@/constants/theme';
+import { RECIPE_IMAGES } from '@/data/recipe-images';
 import { listRecentScans, type ScanRecord } from '@/db/history';
+import { activePlans, type PlanState } from '@/db/cook-plans';
 import { listActivePantry, type PantryItem } from '@/db/pantry';
 import { getFlag, getProfile, setFlag, type Profile } from '@/db/profile';
 import { loadSamplePantry } from '@/db/sample';
@@ -52,14 +54,15 @@ async function loadHome(db: Parameters<typeof listActivePantry>[0]) {
   const session = await getSession(db);
   const spent = await spentThisWeek(db);
   const firstName = session?.user.name?.split(' ')[0] || null;
-  return { items, scans, profile, offerSetup: !profile && !skipped, firstLaunch, savings, firstName, spent };
+  const plans = await activePlans(db);
+  return { items, scans, profile, offerSetup: !profile && !skipped, firstLaunch, savings, firstName, spent, plans };
 }
 
 /** Home: Today dashboard. UC-12.1 first-time user, UC-12.2 returning user. */
 export default function HomeScreen() {
   const db = useSQLiteContext();
   const theme = useTheme();
-  const [{ items, scans, profile, offerSetup, firstLaunch, savings, firstName, spent }, reload] = useFocusQuery(loadHome, {
+  const [{ items, scans, profile, offerSetup, firstLaunch, savings, firstName, spent, plans }, reload] = useFocusQuery(loadHome, {
     items: [] as PantryItem[],
     scans: [] as ScanRecord[],
     profile: null as Profile | null,
@@ -68,6 +71,7 @@ export default function HomeScreen() {
     savings: null as MonthSummary | null,
     firstName: null as string | null,
     spent: 0,
+    plans: new Map<string, PlanState>(),
   });
 
   // 02 Welcome on first launch (UC-11.1).
@@ -126,6 +130,7 @@ export default function HomeScreen() {
         profile={profile}
         savings={savings}
         spent={spent}
+        plans={plans}
         onSample={() =>
           loadSamplePantry(db).then(reload, (e: Error) => Alert.alert('Could not load sample items', e.message))
         }
@@ -157,6 +162,7 @@ function Today({
   profile,
   savings,
   spent,
+  plans,
   onSample,
 }: {
   items: PantryItem[];
@@ -164,6 +170,7 @@ function Today({
   profile: Profile | null;
   savings: MonthSummary | null;
   spent: number;
+  plans: Map<string, PlanState>;
   onSample: () => void;
 }) {
   const groups = items.map((i) => ({ item: i, group: urgencyGroup(i.cook_by) }));
@@ -211,7 +218,7 @@ function Today({
             style={styles.cardsBleed}
             contentContainerStyle={styles.cards}>
             {urgent.map((item) => (
-              <UseTodayCard key={item.id} item={item} width={cardWidth} />
+              <UseTodayCard key={item.id} item={item} plan={plans.get(item.id) ?? null} width={cardWidth} />
             ))}
           </ScrollView>
         )}
@@ -295,7 +302,7 @@ function SummaryCard({
   );
 }
 
-function UseTodayCard({ item, width }: { item: PantryItem; width: number }) {
+function UseTodayCard({ item, plan, width }: { item: PantryItem; plan: PlanState | null; width: number }) {
   const theme = useTheme();
   return (
     <Pressable onPress={() => router.push({ pathname: '/item/[id]', params: { id: item.id } })} accessibilityRole="button">
@@ -314,13 +321,22 @@ function UseTodayCard({ item, width }: { item: PantryItem; width: number }) {
         <ThemedText type="caption" themeColor="textSecondary">
           {item.quantity} {UNIT_LABEL[item.unit] ?? item.unit} · {STORAGE_LABEL[item.storage]}
         </ThemedText>
-        {/* UC-2.7 */}
+        {/* UC-2.7 → Waiting for ingredients → Done cooking (UC-2.10, done on the item screen) */}
         <Pressable
-          onPress={() => router.push({ pathname: '/recipes', params: { focus: item.name } })}
+          onPress={() =>
+            plan
+              ? plan.left_to_buy > 0
+                ? router.push('/shopping')
+                : router.push({ pathname: '/item/[id]', params: { id: item.id } })
+              : router.push({ pathname: '/recipes', params: { focus: item.name, main: item.id } })
+          }
           accessibilityRole="button"
-          style={({ pressed }) => [styles.cookButton, { backgroundColor: theme.highlight, opacity: pressed ? 0.8 : 1 }]}>
-          <ThemedText type="label" themeColor="tintText">
-            Cook with this
+          style={({ pressed }) => [
+            styles.cookButton,
+            { backgroundColor: plan && plan.left_to_buy === 0 ? theme.freshSoft : theme.highlight, opacity: pressed ? 0.8 : 1 },
+          ]}>
+          <ThemedText type="label" themeColor={plan && plan.left_to_buy === 0 ? 'fresh' : 'tintText'}>
+            {!plan ? 'Cook with this' : plan.left_to_buy > 0 ? `Waiting · ${plan.left_to_buy} to buy` : 'Done cooking'}
           </ThemedText>
         </Pressable>
       </Card>
@@ -337,7 +353,11 @@ function RecipeCard({ recipe, flag }: { recipe: RecipeView; flag: BudgetFlag | n
       accessibilityRole="button">
       <Card style={{ padding: Spacing.two, gap: Spacing.two }}>
         <View style={[styles.recipeArt, { backgroundColor: theme.highlight }]}>
-          <Ionicons name="restaurant-outline" size={56} color={theme.tint} />
+          {RECIPE_IMAGES[recipe.id] ? (
+            <Image source={RECIPE_IMAGES[recipe.id]} style={StyleSheet.absoluteFill} contentFit="cover" transition={150} />
+          ) : (
+            <Ionicons name="restaurant-outline" size={56} color={theme.tint} />
+          )}
           <View style={styles.recipeUses}>
             <Pill
               label={`Uses ${recipe.uses.length} of your item${recipe.uses.length === 1 ? '' : 's'}`}
@@ -523,7 +543,7 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.one,
   },
   thumbPill: { position: 'absolute', top: 8, left: 8 },
-  recipeArt: { height: 150, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  recipeArt: { height: 150, borderRadius: 12, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   recipeUses: { position: 'absolute', left: 10, bottom: 10 },
   recipeTitleRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
   meta: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.three, marginTop: Spacing.one },

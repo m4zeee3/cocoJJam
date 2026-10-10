@@ -11,6 +11,8 @@ import { Button } from '@/components/button';
 import { Card } from '@/components/card';
 import { BotBubble, BotTurn, Note, PhotoBubble, PhotoGrid, TimeDivider, TipList, UserBubble } from '@/components/chat';
 import { Chips } from '@/components/chips';
+import { FoodArt } from '@/components/food-art';
+import { FreshnessCheck } from '@/components/freshness-check';
 import { BatchScan } from '@/components/scan-batch';
 import { BOUGHT, PURCHASES, ScanHeader, STORAGES, windowLead, windowText, type Msg, type Scan } from '@/components/scan-shared';
 import { ChoicePills, Stepper } from '@/components/controls';
@@ -30,7 +32,7 @@ import { markScanChatOpen, openScanner } from '@/lib/open-scanner';
 import { FISH_SPECIES, isGenericFish } from '@/domain/fish';
 import { analyzePhoto, DEMO_MODE, shortError, type Analysis } from '@/ml/classifier';
 import { gateMessage } from '@/ml/gate';
-import { itemChoices, MSG, RETAKE_TIPS, type Tip } from '@/ml/messages';
+import { itemAnswer, itemChoices, MSG, RETAKE_TIPS, type Tip } from '@/ml/messages';
 import { QUALITY_MESSAGE } from '@/ml/quality';
 import { freshnessFor, type Item, type ItemRead, type Verdict } from '@/ml/read';
 
@@ -56,7 +58,7 @@ const STORAGE_TIP: Record<Storage, string> = {
 type Step =
   | 'checking'
   | 'confirm'
-  | 'retake'
+  | 'ownCheck'
   | 'invalid'
   | 'species'
   | 'storage'
@@ -68,6 +70,7 @@ type Step =
 
 /** Where the stage came from, in words (no percentages). */
 function scanFindingDetail(scan: Scan) {
+  if (scan.ownCheck) return 'From your own check';
   return scan.view ? 'From your photo · eyes and gills' : 'From your photo';
 }
 
@@ -204,10 +207,14 @@ function ScanTurn({ photo, onChange }: { photo: string; onChange: (msgs: Msg[]) 
   const [scan, setScan] = useState<Scan | null>(null);
   /** The model's reading of this photo, kept until the user confirms the item. */
   const [reading, setReading] = useState<{ items: ItemRead[]; verdict: Verdict } | null>(null);
+  /** The item the user picked, waiting for their own freshness check. */
+  const [picked, setPicked] = useState<{ item: Item; view: 'eye' | 'gill' | null } | null>(null);
   const [typing, setTyping] = useState(false);
   const [typed, setTyped] = useState('');
   const [quantity, setQuantity] = useState(1);
   const [unit, setUnit] = useState('pc');
+  /** The scanned item's pantry row once added, so dishes picked here are planned for it. */
+  const savedId = useRef<string | null>(null);
 
   const say = (...msgs: Msg[]) => setMessages((m) => [...m, ...msgs]);
   /** Why the scan stopped: picks the buttons (S10, S12, S13, S14c). */
@@ -259,27 +266,40 @@ function ScanTurn({ photo, onChange }: { photo: string; onChange: (msgs: Msg[]) 
 
   /** The user said what the photo shows (confirming the model's item, or correcting it). */
   function answerItem(choice: Item | 'none') {
-    say({ kind: 'user', text: choice === 'none' ? 'No' : `Yes, ${choice}` });
+    if (!reading) return;
+    say({ kind: 'user', text: itemAnswer(choice, reading.verdict.best.item) });
     if (choice === 'none') {
-      // Not what the model said: try another photo (a loop until the user says yes).
+      // Not one of the four items: try another photo.
       say({ kind: 'bot', text: MSG.notIt });
       setInvalid('retry');
       setStep('invalid');
       return;
     }
-    if (!reading) return;
     const fresh = freshnessFor(reading.items, choice, reading.verdict);
     const view = choice === 'fish' ? (reading.items.find((i) => i.item === 'fish')?.view ?? null) : null;
-    if (fresh === 'unclear') {
-      // UC-1.11 (S15, S09b): can't settle freshness from the photo, so retake a close-up; never guess.
+    // UC-1.6: clear spoilage in the photo is shown straight away.
+    if (fresh === 'spoiled') return identify(photo, choice, 'spoiled', false, view);
+    // Fresh is only a hint (ml/read.ts): the user's own check always sets the stage.
+    setPicked({ item: choice, view });
+    if (fresh === 'fresh') {
+      say({ kind: 'bot', text: `${MSG.looksFresh(choice)} ${MSG.ownCheck}` });
+    } else if (choice !== reading.verdict.best.item) {
+      say({ kind: 'bot', text: `${MSG.corrected(choice)} ${MSG.ownCheck}` });
+    } else {
+      // UC-1.11 (S15, S09b): can't settle freshness from the photo; retake a close-up or check it yourself.
       say(
-        { kind: 'bot', text: MSG.retake(choice) },
+        { kind: 'bot', text: `${MSG.retake(choice)} ${MSG.orOwnCheck}` },
         { kind: 'tips', title: choice === 'fish' ? 'For a clear check' : undefined, tips: RETAKE_TIPS[choice === 'fish' ? 'fish' : 'meat'] },
       );
-      setStep('retake');
-      return;
     }
-    identify(photo, choice, fresh, false, view);
+    setStep('ownCheck');
+  }
+
+  /** The user's own check of the item's signs (color, smell, feel; eyes and gills for fish). */
+  function answerOwnCheck(stage: Stage, summary: string) {
+    if (!picked) return;
+    say({ kind: 'user', text: summary });
+    identify(photo, picked.item, stage, false, picked.view, true);
   }
 
   function scanFailed(e: Error) {
@@ -307,8 +327,9 @@ function ScanTurn({ photo, onChange }: { photo: string; onChange: (msgs: Msg[]) 
     stage: Stage | null,
     typedIn: boolean,
     view: 'eye' | 'gill' | null = null,
+    ownCheck = false,
   ) {
-    const next: Scan = { photo: uri, item, stage: stage ?? 'good', typedIn, view };
+    const next: Scan = { photo: uri, item, stage: stage ?? 'good', typedIn, view, ownCheck };
     setScan(next);
     // A spoiled result shows the item on its own warning card (S11).
     if (next.stage !== 'spoiled') say({ kind: 'identified', scan: next });
@@ -401,37 +422,67 @@ function ScanTurn({ photo, onChange }: { photo: string; onChange: (msgs: Msg[]) 
           },
         ];
     const { matches } = recommend(withScan, profile ?? DEFAULT_PROFILE, item, 3);
-    say({ kind: 'dishes', item, dishes: matches.map((r) => ({ id: r.id, title: r.title, minutes: r.minutes, cost: r.cost })) });
+    say({
+      kind: 'dishes',
+      item,
+      mainId: savedId.current ?? undefined,
+      dishes: matches.map((r) => ({ id: r.id, title: r.title, minutes: r.minutes, cost: r.cost })),
+    });
   }
 
-  async function save(asWasted: boolean) {
+  /**
+   * A dish (or View dishes) tapped in this scan: the dish is planned for the scanned item
+   * (Cook with this v2), so the item has to be in the pantry first. Picked before
+   * Add to pantry, it's added now.
+   */
+  async function openDish(recipeId: string | null) {
     if (!scan) return;
-    const estimate = scan.estimate ?? estimateCookBy(scan.rulesKey ?? scan.item, 'ref', scan.stage, 'not_sure');
+    let main = savedId.current;
+    if (!main) {
+      main = await store(false);
+      say({ kind: 'bot', text: `Added your ${scan.item} to your pantry, so this dish is planned for it.` });
+      setStep('done');
+    }
+    if (recipeId) router.push({ pathname: '/recipes/[id]', params: { id: recipeId, main } });
+    else router.push({ pathname: '/recipes', params: { focus: scan.item, main } });
+  }
+
+  /** Saves the scanned item and its scan record; returns the pantry id. */
+  async function store(asWasted: boolean) {
+    const s = scan!;
+    const estimate = s.estimate ?? estimateCookBy(s.rulesKey ?? s.item, 'ref', s.stage, 'not_sure');
     const id = await addPantryItem(db, {
-      name: scan.item,
+      name: s.item,
       category: null,
       quantity: asWasted ? 1 : quantity,
       unit: asWasted ? 'pc' : unit,
-      storage: scan.storage ?? 'ref',
-      purchase: scan.purchase,
-      stage: scan.stage,
+      storage: s.storage ?? 'ref',
+      purchase: s.purchase,
+      stage: s.stage,
       confidence: estimate.confidence,
       date_added: toIsoDate(new Date()),
       cook_by: toIsoDate(estimate.cookBy),
       rescan_tomorrow: estimate.rescanTomorrow,
-      thumbnail_uri: scan.photo,
+      thumbnail_uri: s.photo,
       paid_price_php: null,
     });
-    if (asWasted) await setPantryStatus(db, id, 'wasted', scan.stage === 'spoiled' ? 'looked spoiled' : 'past safe window');
+    if (asWasted) await setPantryStatus(db, id, 'wasted', s.stage === 'spoiled' ? 'looked spoiled' : 'past safe window');
+    else savedId.current = id;
     await addScan(db, [
       {
-        name: scan.item,
-        stage: scan.stage,
-        photo: scan.photo,
+        name: s.item,
+        stage: s.stage,
+        photo: s.photo,
         daysLeft: estimate.daysLeft,
         outcome: asWasted ? 'wasted' : 'pantry',
       },
     ]);
+    return id;
+  }
+
+  async function save(asWasted: boolean) {
+    if (!scan) return;
+    await store(asWasted);
     if (asWasted) {
       say({ kind: 'user', text: 'Log as wasted' }, { kind: 'bot', text: 'Logged as wasted. Salamat sa pag-check!' });
       setStep('done');
@@ -448,7 +499,7 @@ function ScanTurn({ photo, onChange }: { photo: string; onChange: (msgs: Msg[]) 
   return (
     <>
         {messages.map((m, i) => (
-          <Message key={i} msg={m} />
+          <Message key={i} msg={m} onDish={openDish} />
         ))}
 
         {/* S04b: one photo */}
@@ -490,10 +541,13 @@ function ScanTurn({ photo, onChange }: { photo: string; onChange: (msgs: Msg[]) 
             </ThemedText>
           </View>
         )}
-        {/* UC-1.11 (S15, S09b) */}
-        {step === 'retake' && (
+        {/* The user's own check sets the stage; the photo alone never says fresh. UC-1.11 (S15, S09b): or retake. */}
+        {step === 'ownCheck' && (
           <View style={styles.indent}>
-            <Button title="Retake close-up" icon="scan" onPress={() => openScanner('camera')} />
+            <Card>
+              <FreshnessCheck item={picked?.item ?? null} onDone={answerOwnCheck} />
+            </Card>
+            <Button title="Retake close-up" icon="scan" size="small" variant="secondary" onPress={() => openScanner('camera')} />
           </View>
         )}
 
@@ -662,14 +716,15 @@ function ItemRow({ scan, detail, pill }: { scan: Scan; detail: string; pill?: Re
   );
 }
 
-export function Message({ msg }: { msg: Msg }) {
+/** `onDish` = the live scan's handler for a tapped dish; saved threads open it for `mainId`. */
+export function Message({ msg, onDish }: { msg: Msg; onDish?: (recipeId: string | null) => void }) {
   switch (msg.kind) {
     case 'divider':
       return <TimeDivider at={msg.at} />;
     case 'photos':
       return <PhotoGrid uris={msg.uris} />;
     case 'dishes':
-      return <DishesCard item={msg.item} dishes={msg.dishes} />;
+      return <DishesCard item={msg.item} mainId={msg.mainId} dishes={msg.dishes} onOpen={onDish} />;
     case 'photo':
       return <PhotoBubble uri={msg.uri} />;
     case 'user':
@@ -733,8 +788,25 @@ export function Message({ msg }: { msg: Msg }) {
 }
 
 /** R01 in the chat: the dishes picked for the scanned item, and a link to all of them. */
-function DishesCard({ item, dishes }: { item: string; dishes: Extract<Msg, { kind: 'dishes' }>['dishes'] }) {
+function DishesCard({
+  item,
+  mainId,
+  dishes,
+  onOpen,
+}: {
+  item: string;
+  mainId?: string;
+  dishes: Extract<Msg, { kind: 'dishes' }>['dishes'];
+  onOpen?: (recipeId: string | null) => void;
+}) {
   const theme = useTheme();
+  const main = mainId ? { main: mainId } : {};
+  const open =
+    onOpen ??
+    ((recipeId: string | null) =>
+      recipeId
+        ? router.push({ pathname: '/recipes/[id]', params: { id: recipeId, ...main } })
+        : router.push({ pathname: '/recipes', params: { focus: item, ...main } }));
   return (
     <BotTurn>
       <BotBubble>
@@ -747,9 +819,10 @@ function DishesCard({ item, dishes }: { item: string; dishes: Extract<Msg, { kin
           {dishes.map((d, n) => (
             <Pressable
               key={d.id}
-              onPress={() => router.push({ pathname: '/recipes/[id]', params: { id: d.id } })}
+              onPress={() => open(d.id)}
               accessibilityRole="link"
               style={[styles.dish, n > 0 && { borderTopWidth: 1, borderTopColor: theme.backgroundSelected }]}>
+              <FoodArt size={44} radius={10} recipeId={d.id} />
               <View style={{ flex: 1 }}>
                 <ThemedText type="smallBold">{d.title}</ThemedText>
                 <ThemedText type="caption" themeColor="textSecondary">
@@ -762,7 +835,7 @@ function DishesCard({ item, dishes }: { item: string; dishes: Extract<Msg, { kin
         </Card>
       )}
       <Pressable
-        onPress={() => router.push({ pathname: '/recipes', params: { focus: item } })}
+        onPress={() => open(null)}
         accessibilityRole="link"
         hitSlop={6}
         style={styles.row}>
